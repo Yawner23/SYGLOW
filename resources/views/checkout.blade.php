@@ -1,162 +1,190 @@
 @extends('layouts.main-app')
 
-@section('title', 'Place Order')
+@section('title', 'Checkout')
 
 @section('content')
-<div class="bg-[#fffcf7] h-screen">
+<div class="bg-[#fffcf7] min-h-screen">
+    {{-- Header --}}
     <div class="bg-[#fdebdd] relative z-10">
-        <div class="container flex justify-center px-4 py-2 mx-auto space-y-2 text-sm md:flex-row md:space-y-0">
+        <div class="container flex justify-center px-4 py-2 mx-auto text-sm">
             <img src="{{ asset('images/logo-header.png') }}" alt="Logo">
         </div>
     </div>
+
+    {{-- Vertical divider --}}
     <div class="border-l-2 border-[#f590b0] absolute inset-0 left-1/2 top-0 hidden md:block"></div>
-    <div class="container relative z-50 max-w-screen-xl mx-auto">
-        <div class="grid grid-cols-1 md:grid-cols-2">
-            <div class="p-8">
-                <div class="space-y-4">
-                    <div class="flex flex-row items-center gap-2">
-                        <h1 class="text-xl font-bold">Delivery</h1>
-                        <button id="change-address-button" class="bg-gradient-to-r from-[#f590b0] to-[#f56e98] rounded-lg w-1/4 py-2 text-white border-2 border-white flex items-center px-2">
-                            <i class='bx bx-plus'></i> Change Address
-                        </button>
-                    </div>
 
-                    <section class="grid grid-cols-2 gap-4">
-                        <div class="col-span-2">
-                            <input type="text" id="full_address" class="w-full" placeholder="Full Address" readonly>
-                        </div>
-                        <div>
-                            <input type="text" id="barangay" class="w-full" placeholder="Barangay" readonly>
-                        </div>
-                        <div>
-                            <input type="text" id="city" class="w-full" placeholder="City/Municipality" readonly>
-                        </div>
-                        <div>
-                            <input type="text" id="province" class="w-full" placeholder="Province" readonly>
-                        </div>
-                        <div>
-                            <input type="text" id="zip_code" class="w-full" placeholder="Zip Code" readonly>
-                        </div>
-                        <div class="col-span-2">
-                            <input type="text" id="email_address" class="w-full" placeholder="Email Address" readonly>
-                        </div>
-                        <div class="col-span-2">
-                            <input type="text" id="delivery_instructions" class="w-full" placeholder="Delivery Instruction (Optional)" readonly>
-                        </div>
-                    </section>
+    <div class="container relative z-50 max-w-screen-xl mx-auto py-8">
+        <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
 
-                    <h1 class="text-xl font-bold">Contact</h1>
-                    <section class="grid grid-cols-2 gap-4">
-                        <div class="col-span-2">
-                            <input type="text" id="contact_no" class="w-full" placeholder="Contact No." readonly>
-                        </div>
-                        <div class="col-span-2">
-                            <input type="text" id="tel_no" class="w-full" placeholder="Tel No. (Optional)" readonly>
-                        </div>
-                    </section>
+            {{-- Delivery Section --}}
+            <div class="p-8 bg-white rounded shadow space-y-6">
+                <div class="flex items-center justify-between">
+                    <h1 class="text-xl font-bold">Delivery</h1>
+                    <button id="change-address-button" class="bg-gradient-to-r from-[#f590b0] to-[#f56e98] rounded-lg w-1/4 py-2 text-white flex items-center justify-center gap-2">
+                        <i class='bx bx-plus'></i> Change Address
+                    </button>
                 </div>
+
+                <section class="grid grid-cols-2 gap-4">
+                    <div class="col-span-2"><input type="text" id="full_address" class="w-full p-2 border rounded" placeholder="Full Address" readonly></div>
+                    <div><input type="text" id="barangay" class="w-full p-2 border rounded" placeholder="Barangay" readonly></div>
+                    <div><input type="text" id="city" class="w-full p-2 border rounded" placeholder="City/Municipality" readonly></div>
+                    <div><input type="text" id="province" class="w-full p-2 border rounded" placeholder="Province" readonly></div>
+                    <div><input type="text" id="zip_code" class="w-full p-2 border rounded" placeholder="Zip Code" readonly></div>
+                    <div class="col-span-2"><input type="text" id="email_address" class="w-full p-2 border rounded" placeholder="Email Address" readonly></div>
+                    <div class="col-span-2"><input type="text" id="delivery_instructions" class="w-full p-2 border rounded" placeholder="Delivery Instructions (Optional)" readonly></div>
+                </section>
+
+                <h1 class="text-xl font-bold">Contact</h1>
+                <section class="grid grid-cols-2 gap-4">
+                    <div class="col-span-2"><input type="text" id="contact_no" class="w-full p-2 border rounded" placeholder="Contact No." readonly></div>
+                    <div class="col-span-2"><input type="text" id="tel_no" class="w-full p-2 border rounded" placeholder="Tel No. (Optional)" readonly></div>
+                </section>
 
                 @include('layouts.delivery_address')
             </div>
 
-            <form action="{{ route('save.payment_summary') }}" method="POST">
+            {{-- Cart & Confirm Payment --}}
+            <form id="checkoutForm" action="{{ route('save.payment_summary') }}" method="POST" class="p-8 bg-white rounded shadow space-y-6">
                 @csrf
-                <div class="p-8 space-y-4">
 
-                    @foreach($cart as $id => $product)
-                    <div class="flex flex-row space-x-4">
-                        <div>
-                            <div class="flex justify-end">
-                                <button class="bg-[#f590b0] text-white rounded-full w-6 h-6">{{ $product['quantity'] }}</button>
-                            </div>
-                            <img class="bg-[#fdebdd] object-contain px-8 py-4 h-[8rem] w-full -mt-4" src="{{ asset('images/uploads/product_images/' . $product['image']) }}" alt="{{ $product['name'] }}">
-                        </div>
-                        <div>
-                            <h1 class="text-2xl font-semibold">{{ $product['name'] }}</h1>
-                            <p>₱{{ number_format($product['price'], 2) }}</p>
-                        </div>
-                        <input type="text" name="product_id[]" readonly hidden value="{{ $id }}">
-                        <input type="text" name="quantity[]" readonly hidden value="{{ $product['quantity'] }}">
-                        <input type="text" name="subtotal[]" readonly hidden value="{{$product['price'] * $product['quantity'] }}">
-                    </div>
-                    <div class="flex justify-between">
-                        <p>Subtotal</p>
-                        <p>₱{{ number_format($product['price'] * $product['quantity'], 2) }}</p>
-                    </div>
-                    @endforeach
-
-                    <div class="space-y-2">
-                        <div class="flex justify-between">
-                            <p>Total</p>
-                            <p>₱{{ number_format($totalAmount , 2) }}</p>
-                        </div>
-                    </div>
-
-                    <div class="space-y-2">
-                        <label for="voucher_code" class="text-lg font-semibold">Voucher Code (if any)</label>
-                        <input type="text" id="voucher_code" name="voucher_code" class="w-full p-2 border rounded" placeholder="Enter voucher code">
-                        @error('voucher_code')
-                        <div class="mt-2 text-sm text-red-500">{{ $message }}</div>
-                        @enderror
-                    </div>
-
-                    <!-- Display voucher discount if available -->
-                    @if(session('discount'))
-                    <div class="space-y-2">
-                        <div class="flex justify-between">
-                            <p>Voucher Discount</p>
-                            <p>₱{{ number_format(session('discount'), 2) }}</p>
-                        </div>
-                        <div class="flex justify-between font-bold">
-                            <p>New Total</p>
-                            <p>₱{{ number_format($totalAmount - session('discount'), 2) }}</p>
-                        </div>
-                    </div>
-                    @endif
-
-                    <input type="text" id="customer_id" name="customer_id" value="{{ Auth::user()->id }}" readonly hidden>
-                    <input type="text" name="delivery_address_id" id="delivery_address_id" readonly hidden>
-                    <input type="text" name="total" id="total" value="{{ $totalAmount }}" readonly hidden>
-
-                    <h1 class="text-2xl font-semibold">Payment Method</h1>
-                    <div>
-                        <!-- Payment method options -->
-                        <div class="mb-[0.125rem] block min-h-[1.5rem] ps-[1.5rem]">
-                            <input type="radio" name="payment_method[]" value="card" id="radioDefault01">
-                            <label class="mt-px inline-block ps-[0.15rem] hover:cursor-pointer" for="radioDefault01">
-                                Credit/Debit Card
-                            </label>
-                        </div>
-                        <div class="mb-[0.125rem] block min-h-[1.5rem] ps-[1.5rem]">
-                            <input type="radio" name="payment_method[]" value="gcash" id="radioDefault02">
-                            <label class="mt-px inline-block ps-[0.15rem] hover:cursor-pointer" for="radioDefault02">
-                                Gcash
-                            </label>
-                        </div>
-                        <div class="mb-[0.125rem] block min-h-[1.5rem] ps-[1.5rem]">
-                            <input type="radio" name="payment_method[]" value="maya" id="radioDefault03">
-                            <label class="mt-px inline-block ps-[0.15rem] hover:cursor-pointer" for="radioDefault03">
-                                Maya
-                            </label>
-                        </div>
-                    </div>
-
-                    @error('payment_method')
-                    <div class="mt-2 text-sm text-red-500">{{ $message }}</div>
-                    @enderror
-
-                    @if(session('error'))
-                    <div class="mt-2 text-sm text-red-500">{{ session('error') }}</div>
-                    @endif
-
-                    <div>
-                        <button type="submit" class="bg-gradient-to-r from-[#f590b0] to-[#f56e98] rounded-lg w-full py-2 text-white border-2 border-white">
-                            PLACE ORDER
+                {{-- Cart Items --}}
+                @foreach($cart as $id => $product)
+                <div class="flex flex-row space-x-4 items-center">
+                    <div class="relative h-32 w-32">
+                        <img class="h-32 w-32 object-contain bg-[#fdebdd] p-4 rounded" src="{{ asset('images/uploads/product_images/' . $product['image']) }}" alt="{{ $product['name'] }}">
+                        <button class="absolute top-1 right-1 bg-[#f590b0] text-white rounded-full w-6 h-6 flex items-center justify-center text-sm">
+                            {{ $product['quantity'] }}
                         </button>
                     </div>
+
+                    <div class="flex-1">
+                        <h2 class="text-2xl font-semibold">{{ $product['name'] }}</h2>
+                        <p>₱{{ number_format($product['price'], 2) }}</p>
+                        <p>Subtotal: ₱{{ number_format($product['price'] * $product['quantity'], 2) }}</p>
+                    </div>
+
+                    <input type="hidden" name="product_id[]" value="{{ $id }}">
+                    <input type="hidden" name="quantity[]" value="{{ $product['quantity'] }}">
+                    <input type="hidden" name="subtotal[]" value="{{ $product['price'] * $product['quantity'] }}">
                 </div>
+                @endforeach
+
+                {{-- Total --}}
+                <div class="flex justify-between font-bold">
+                    <p>Total</p>
+                    <p id="displayTotal">₱{{ number_format($totalAmount, 2) }}</p>
+                </div>
+
+                {{-- Hidden Inputs --}}
+                <input type="hidden" name="customer_id" value="{{ Auth::user()->id }}">
+                <input type="hidden" name="delivery_address_id" id="delivery_address_id">
+                <input type="hidden" name="total" value="{{ $totalAmount }}" id="hiddenTotal">
+                <input type="hidden" name="shipping_fee" id="hiddenShippingFee" value="0">
+
+                {{-- Confirm Payment Button --}}
+                <button type="button" id="showOrderSummary" class="w-full py-2 bg-[#f590b0] text-white rounded-lg font-bold">Confirm Payment</button>
             </form>
+
         </div>
     </div>
 </div>
+
+{{-- Order Summary Modal --}}
+<div id="orderSummaryModal" class="fixed inset-0 z-50 flex items-center justify-center hidden bg-black bg-opacity-50">
+    <div class="w-11/12 md:w-1/3 p-6 bg-white rounded-lg shadow-xl">
+        <h2 class="text-2xl font-bold text-center border-b pb-2 mb-4">Order Summary</h2>
+        <div class="space-y-4">
+            <div id="modalProducts"></div>
+            <div class="flex justify-between">
+                <p>Shipping Fee</p>
+                <p id="modalShippingFee">₱0.00</p>
+            </div>
+            <div class="flex justify-between font-bold">
+                <p>Total</p>
+                <p id="modalGrandTotal">₱0.00</p>
+            </div>
+            <div class="flex space-x-4 mt-4">
+                <button id="modalConfirmPayment" class="w-full py-2 bg-[#f590b0] text-white font-bold rounded">Confirm Payment</button>
+                <button id="modalClose" class="w-full py-2 bg-gray-200 rounded font-bold hover:bg-gray-300">Close</button>
+            </div>
+        </div>
+    </div>
+</div>
+
+<script>
+    document.addEventListener("DOMContentLoaded", () => {
+        // Ensure cart is an array
+        const cartData = @json($cart);
+        const cart = Array.isArray(cartData) ? cartData : Object.values(cartData);
+        const totalAmount = parseFloat(@json($totalAmount));
+
+        const showModalBtn = document.getElementById("showOrderSummary");
+        const modal = document.getElementById("orderSummaryModal");
+        const modalProducts = document.getElementById("modalProducts");
+        const modalShippingFee = document.getElementById("modalShippingFee");
+        const modalGrandTotal = document.getElementById("modalGrandTotal");
+        const hiddenShippingFee = document.getElementById("hiddenShippingFee");
+        const hiddenTotal = document.getElementById("hiddenTotal");
+        const modalClose = document.getElementById("modalClose");
+        const modalConfirm = document.getElementById("modalConfirmPayment");
+        const deliveryAddressId = document.getElementById("delivery_address_id");
+
+        async function fetchShippingFee(addressId) {
+            if (!addressId) return 0;
+            try {
+                const response = await fetch("{{ route('calculate.shipping_fee') }}", {
+                    method: "POST",
+                    headers: {
+                        "Content-Type": "application/json",
+                        "X-CSRF-TOKEN": "{{ csrf_token() }}",
+                    },
+                    body: JSON.stringify({
+                        address_id: addressId
+                    }),
+                });
+                const data = await response.json();
+                return data.shipping_fee ?? 0;
+            } catch (err) {
+                console.error("Error fetching shipping fee:", err);
+                return 0;
+            }
+        }
+
+        async function populateModal() {
+            modalProducts.innerHTML = '';
+            cart.forEach(p => {
+                const div = document.createElement('div');
+                div.classList.add('flex', 'justify-between', 'mb-1');
+                div.innerHTML = `<span>${p.name} x${p.quantity}</span> <span>₱${(p.price * p.quantity).toFixed(2)}</span>`;
+                modalProducts.appendChild(div);
+            });
+
+            const shippingFee = await fetchShippingFee(deliveryAddressId.value);
+            modalShippingFee.innerText = `₱${shippingFee.toFixed(2)}`;
+            hiddenShippingFee.value = shippingFee;
+
+            const grandTotal = totalAmount + shippingFee;
+            modalGrandTotal.innerText = `₱${grandTotal.toFixed(2)}`;
+            hiddenTotal.value = grandTotal;
+        }
+
+        showModalBtn.addEventListener('click', () => {
+            if (!deliveryAddressId.value) {
+                alert("Please select a delivery address first.");
+                return;
+            }
+            populateModal();
+            modal.classList.remove('hidden');
+        });
+
+        modalClose.addEventListener('click', () => modal.classList.add('hidden'));
+
+        modalConfirm.addEventListener('click', () => {
+            document.getElementById('checkoutForm').submit();
+        });
+    });
+</script>
+
 @endsection

@@ -43,11 +43,7 @@
 
         <div class="py-2 border-t border-gray-200">
             <p class="text-sm font-semibold">Total:</p>
-            @if($payment->shipping && $payment->shipping->shipping_fee !== null)
-            <p class="text-lg font-bold text-gray-800">₱{{ $payment->total + $payment->shipping->shipping_fee }}</p>
-            @else
             <p class="text-lg font-bold text-gray-800">₱{{ $payment->total }}</p>
-            @endif
         </div>
 
         <div class="py-2 border-t border-gray-200">

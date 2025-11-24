@@ -73,7 +73,11 @@
                         {{ $distributor->city}}
                     </td>
                     <td class="px-6 py-4">
-                        {{ $distributor->user->status}}
+                        @if($distributor->user)
+                        {{ $distributor->user->status }}
+                        @else
+                        N/A
+                        @endif
                     </td>
                 </tr>
                 @endforeach

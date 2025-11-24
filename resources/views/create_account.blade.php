@@ -63,6 +63,14 @@
                                 <label class="font-bold" for="password_confirmation">Confirm Password</label>
                                 <input type="password" id="password_confirmation" name="password_confirmation" class="border border-[#f590b0] bg-white opacity-100 w-full rounded" required>
                             </div>
+
+                            {{-- ✅ Google reCAPTCHA --}}
+                            <div class="mb-6">
+                                <div class="g-recaptcha" data-sitekey="{{ env('RECAPTCHA_SITEKEY') }}"></div>
+                                @error('g-recaptcha-response')
+                                <p class="mt-2 text-sm text-red-600">{{ $message }}</p>
+                                @enderror
+                            </div>
                             <!-- <div class="flex flex-col col-span-2 md:col-span-1">
                                 <label class="font-bold" for="referral_code">Referral Code</label>
                                 <input type="text" id="referral_code" name="referral_code" class="border border-[#f590b0] bg-white opacity-100 w-full rounded" required>
@@ -82,4 +90,7 @@
 </div>
 @include('layouts.member')
 @include('layouts.footer')
+
+{{-- ✅ Google reCAPTCHA script --}}
+<script src="https://www.google.com/recaptcha/api.js" async defer></script>
 @endsection

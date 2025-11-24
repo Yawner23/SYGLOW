@@ -5,6 +5,7 @@ namespace App\Http\Controllers;
 use App\Exports\UsersExport;
 use App\Models\Customer;
 use App\Models\Distributor;
+use App\Models\ReferralCode;
 use App\Models\Role;
 use App\Models\User;
 use App\Models\RoleUser;
@@ -178,37 +179,54 @@ class UserManagementController extends Controller
             ]);
 
             Log::info('Customer profile created.', ['customer_id' => $customer->id]);
-        } elseif (strtolower($roleName) === 'distributor') {
+        } elseif (strtolower($roleName) === 'distributor' || $request->role === 'distributor') {
+
             $request->validate([
-                'name' => 'required|string|max:255',
-                'distributor_type' => 'required|string',
-                'region' => 'required|string',
-                'province' => 'required|string',
-                'city' => 'required|string',
-                'brgy' => 'required|string',
-                'contact_number' => 'required|string',
+                'distributor_type' => ['required', 'string'],
+                'region' => ['required', 'string', 'max:255'],
+                'province' => ['required', 'string', 'max:255'],
+                'city' => ['required', 'string', 'max:255'],
+                'brgy' => ['required', 'string', 'max:255'],
+                'name' => ['required', 'string', 'max:255'],
+                'email' => ['required', 'string', 'max:255'],
+                'contact_number' => ['required', 'string', 'max:255'],
+                'code' => ['required', 'string', 'max:255'],
             ]);
 
+            // Validate referral code based on distributor_type
+            if ($request->distributor_type == 1) {
+                $codeExists = ReferralCode::where('referral_code', $request->code)->exists();
+                if (!$codeExists) {
+                    return redirect()->back()->withInput()->withErrors(['code' => 'Referral Code does not exist']);
+                }
+            } elseif (in_array($request->distributor_type, [2, 3])) {
+                $codeExists = Distributor::where('distributor_type', '1')->where('user_id', $request->code)->exists();
+                if (!$codeExists) {
+                    return redirect()->back()->withInput()->withErrors(['code' => 'Code does not match any existing distributor user_id']);
+                }
+            } else {
+                $codeExists = Distributor::where('distributor_type', '3')->where('user_id', $request->code)->exists();
+                if (!$codeExists) {
+                    return redirect()->back()->withInput()->withErrors(['code' => 'Code does not match any existing City Distributor']);
+                }
+            }
+
+            // Create Distributor record
             $distributor = Distributor::create([
                 'user_id' => $user->id,
-                'name' => $request->input('name'),
-                'distributor_type' => $request->input('distributor_type'),
-                'region' => $request->input('region'),
-                'province' => $request->input('province'),
-                'city' => $request->input('city'),
-                'brgy' => $request->input('brgy'),
-                'contact_number' => $request->input('contact_number'),
-                'code' => $request->input('code'),
-                'valid_id_path' => $request->input('valid_id_path'),
-                'selfie_with_id_path' => $request->input('selfie_with_id_path'),
-                'photo_with_background_path' => $request->input('photo_with_background_path'),
-                'profile_picture' => $request->input('profile_picture'),
+                'distributor_type' => $request->distributor_type,
+                'region' => $request->region,
+                'province' => $request->province,
+                'city' => $request->city,
+                'brgy' => $request->brgy,
+                'contact_number' => $request->contact_number,
+                'name' => $request->name,
+                'code' => $request->code,
             ]);
 
             Log::info('Distributor profile created.', ['distributor_id' => $distributor->id]);
-        } else {
-            Log::warning('Unknown role detected.', ['role' => $roleName, 'user_id' => $user->id]);
         }
+
 
         Log::info('Store User process completed.', ['user_id' => $user->id]);
 

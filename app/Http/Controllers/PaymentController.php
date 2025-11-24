@@ -110,9 +110,11 @@ class PaymentController extends Controller
 
     public function index()
     {
-
         if (request()->ajax()) {
-            $payments = Payment::with(['customer', 'deliveryAddress'])->select('*');
+            $payments = Payment::with(['customer', 'deliveryAddress'])
+                ->orderBy('created_at', 'desc') // Latest payments first
+                ->select('*');
+
             return DataTables::of($payments)
                 ->addIndexColumn()
                 ->addColumn('status', function ($payment) {
@@ -124,13 +126,17 @@ class PaymentController extends Controller
                 ->make(true);
         }
 
-
         return view('admin.payments.index');
     }
 
 
+    // ------------------DISTRIBUTOR SIDE---------------------------
     public function payment_summary(Request $request)
     {
+        Log::info('📦 Payment Summary Request Received', [
+            'data' => $request->all()
+        ]);
+
         $validatedData = $request->validate([
             'customer_id' => 'exists:users,id',
             'delivery_address_id' => 'exists:delivery_address,id',
@@ -141,61 +147,112 @@ class PaymentController extends Controller
             'product_id.*' => 'exists:products,id',
             'quantity.*' => 'integer|min:1',
             'voucher_code' => 'nullable|string',
-            'confirm_checkout' => 'sometimes|boolean',
-            'payment_method' => 'nullable', // allow null
+            'payment_method' => 'nullable', // no more error
         ]);
 
-        // Initialize discount
         $discount = 0;
 
-        // Check if a voucher code was provided
+        /*
+    |--------------------------------------------------------------------------
+    | APPLY VOUCHER CODE
+    |--------------------------------------------------------------------------
+    */
         if ($request->filled('voucher_code')) {
             $voucher = Voucher::where('code', $request->voucher_code)
                 ->where('status', 'active')
                 ->first();
 
-            if (!$voucher || ($voucher->usage_limit && $voucher->used_count >= $voucher->usage_limit)) {
-                return redirect()->back()->withErrors(['voucher_code' => 'Invalid or expired voucher code.']);
+            if (!$voucher) {
+                return back()->withErrors(['voucher_code' => 'Invalid or expired voucher code.']);
             }
 
-            // Ensure used_count defaults to 1 if null
             $usedCount = $voucher->used_count ?? 0;
 
             if ($voucher->usage_limit && $usedCount >= $voucher->usage_limit) {
-                return redirect()->back()->withErrors(['voucher_code' => 'Voucher usage limit exceeded.']);
+                return back()->withErrors(['voucher_code' => 'Voucher usage limit exceeded.']);
             }
 
-            // Apply discount based on the voucher type
             if ($voucher->discount_type == 'percentage') {
-                $discount = ($validatedData['total'] * ($voucher->discount_value / 100));
+                $discount = $validatedData['total'] * ($voucher->discount_value / 100);
             } else {
                 $discount = $voucher->discount_value;
             }
 
-            // Ensure the discount does not exceed the total amount
             $discount = min($discount, $validatedData['total']);
-
-            // Update the total amount after applying the discount
             $validatedData['total'] -= $discount;
 
-            // Update used count
             $voucher->used_count = $usedCount + 1;
             $voucher->save();
+
+            Log::info('🎟 Voucher Applied', [
+                'voucher' => $voucher->code,
+                'discount' => $discount
+            ]);
         }
 
-        // Create payment record
-        $payment = new Payment();
-        $payment->customer_id = $validatedData['customer_id'];
-        $payment->delivery_address_id = $validatedData['delivery_address_id'];
-        $payment->payment_method = implode(',', $validatedData['payment_method']); // Save selected payment methods as a string
-        $payment->total = $validatedData['total'];
-        $payment->status = 'unpaid';
-        $payment->save();
+        /*
+    |--------------------------------------------------------------------------
+    | COMPUTE SHIPPING FEE BASED ON ADDRESS + WEIGHT
+    |--------------------------------------------------------------------------
+    */
+        $address = DeliveryAddress::find($validatedData['delivery_address_id']);
 
-        // Store payment_id in the session
+        $region = $this->mapProvinceToRegion($address->province);
+
+        // compute weight of all products
+        $totalWeight = 0;
+        foreach ($request->product_id as $index => $prodId) {
+            $weight = DB::table('products_weights')->where('product_id', $prodId)->first();
+
+            if ($weight) {
+                $w = strtolower($weight->weight_unit) == 'g'
+                    ? $weight->weights / 1000
+                    : $weight->weights;
+
+                $totalWeight += $w * $request->quantity[$index];
+            }
+        }
+
+        // round weight to nearest 0.5kg
+        $totalWeight = ceil($totalWeight * 2) / 2;
+
+        $shippingFee = $this->computeShippingFee($region, $totalWeight);
+
+        Log::info('🚚 Shipping Fee Computed', [
+            'region' => $region,
+            'total_weight' => $totalWeight,
+            'shipping_fee' => $shippingFee
+        ]);
+
+
+        /*
+    |--------------------------------------------------------------------------
+    | CREATE PAYMENT
+    |--------------------------------------------------------------------------
+    */
+        $payment = Payment::create([
+            'customer_id' => $validatedData['customer_id'],
+            'delivery_address_id' => $validatedData['delivery_address_id'],
+            'payment_method' => 'HitPay', // hardcoded as Hitpay
+            'total' => $validatedData['total'] + $shippingFee,
+            'discount' => $discount,
+            'shipping_fee' => $shippingFee,
+            'status' => 'unpaid',
+        ]);
+
         Session::put('payment_id', $payment->id);
 
-        // Create payment products
+        Log::info('💰 Payment Record Created', [
+            'payment_id' => $payment->id,
+            'total' => $payment->total,
+            'payment_method' => $payment->payment_method, // optional logging
+        ]);
+
+        /*
+    |--------------------------------------------------------------------------
+    | SAVE ALL PRODUCTS
+    |--------------------------------------------------------------------------
+    */
         foreach ($request->product_id as $key => $productId) {
             PaymentProduct::create([
                 'payment_id' => $payment->id,
@@ -205,16 +262,73 @@ class PaymentController extends Controller
             ]);
         }
 
-        // Redirect to a success page or the next step in your application
-        return redirect()->route('payment.success')->with([
-            'success' => 'Payment has been recorded.',
+        /*
+    |--------------------------------------------------------------------------
+    | CREATE SHIPPING TABLE ENTRY
+    |--------------------------------------------------------------------------
+    */
+        Shipping::create([
             'payment_id' => $payment->id,
-            'subtotal' => array_sum($request->subtotal),
-            'total' => $validatedData['total'],
-            'payment_method' => implode(',', $validatedData['payment_method']),
+            'courier' => 'JNT',
+            'date_of_shipping' => now(),
+            'shipping_fee' => $shippingFee,
+        ]);
+
+        Log::info('📨 Shipping Record Inserted', [
+            'payment_id' => $payment->id,
+            'shipping_fee' => $shippingFee
+        ]);
+
+        /*
+    |--------------------------------------------------------------------------
+    | REDIRECT TO HITPAY OR SUCCESS PAGE
+    |--------------------------------------------------------------------------
+    */
+        return $this->processHitpayPayment(
+            $payment,
+            $request->product_id,
+            $request->subtotal,
+            $discount,
+            $shippingFee
+        );
+    }
+    // ------------------DISTRIBUTOR SIDE---------------------------
+    public function calculateShippingFee(Request $request)
+    {
+        $addressId = $request->address_id;
+        $cart = session('cart', []);
+
+        if (!$addressId || empty($cart)) {
+            return response()->json(['error' => 'Address or cart not found.'], 400);
+        }
+
+        $address = DeliveryAddress::find($addressId);
+        if (!$address) {
+            return response()->json(['error' => 'Address not found.'], 404);
+        }
+
+        $region = $this->mapProvinceToRegion($address->province);
+
+        // compute total weight
+        $totalWeight = 0;
+        foreach ($cart as $id => $item) {
+            $weightData = DB::table('products_weights')->where('product_id', $id)->first();
+            if ($weightData) {
+                $weight = strtolower($weightData->weight_unit) === 'g' ? $weightData->weights / 1000 : $weightData->weights;
+                $totalWeight += $weight * $item['quantity'];
+            }
+        }
+
+        $totalWeight = ceil($totalWeight * 2) / 2;
+        $shippingFee = $this->computeShippingFee($region, $totalWeight);
+
+        return response()->json([
+            'shipping_fee' => $shippingFee,
+            'display' => '₱' . number_format($shippingFee, 2),
         ]);
     }
 
+    //  --------------CUSTOMER SIDE-------------------
     public function payment(Request $request)
     {
         // Validate input
@@ -437,40 +551,6 @@ class PaymentController extends Controller
         // Default fallback
         return 'MINDANAO';
     }
-
-    private function computeCodFee($declaredValue, $shippingFee)
-    {
-        // Basic values
-        $codFeeRate = 0.0275; // 2.75%
-        $vatRate = 0.12;      // 12%
-        $valuationRate = 0.01; // 1%
-
-        // Compute components
-        $codFee = $declaredValue * $codFeeRate;
-        $vat = $codFee * $vatRate;
-        $valuationFee = $declaredValue * $valuationRate;
-
-        // Total shipping (shipping + valuation)
-        $totalShipping = $shippingFee + $valuationFee;
-
-        // Total to charge for COD
-        $totalCodCharge = $totalShipping + $codFee + $vat;
-
-        // Credit to merchant (if seller shoulders COD)
-        $merchantCredit = $declaredValue - ($codFee + $vat);
-
-        return [
-            'declared_value' => $declaredValue,
-            'shipping_fee' => $shippingFee,
-            'valuation_fee' => round($valuationFee, 2),
-            'cod_fee' => round($codFee, 2),
-            'vat' => round($vat, 2),
-            'total_shipping' => round($totalShipping, 2),
-            'total_cod_charge' => round($totalCodCharge, 2),
-            'merchant_credit' => round($merchantCredit, 2),
-        ];
-    }
-
 
 
     private function computeShippingFee($region, $weight)
@@ -806,9 +886,10 @@ class PaymentController extends Controller
         ]);
     }
 
-
     public function processPayment(Request $request)
     {
+        Log::info('ProcessPayment request received', ['request_data' => $request->all()]);
+
         $request->validate([
             'order_id' => 'required|string',
             'product_ids' => 'required|json',
@@ -819,14 +900,13 @@ class PaymentController extends Controller
         ]);
 
         $paymentMethod = $request->input('payment_method'); // 👈 CHECK PAYMENT METHOD
-
         $productIds = json_decode($request->input('product_ids'), true);
         $subtotals = json_decode($request->input('subtotals'), true);
         $discount = (float)$request->input('discount', 0);
         $voucherCode = $request->input('voucher_code');
         $orderId = $request->input('order_id');
 
-        $payment = Payment::with(['products.product'])->findOrFail($orderId);
+        $payment = Payment::with(['products.product', 'deliveryAddress'])->findOrFail($orderId);
 
         $province = strtoupper(optional($payment->deliveryAddress)->province ?? 'MINDANAO');
         $region = $this->mapProvinceToRegion($province);
@@ -858,54 +938,74 @@ class PaymentController extends Controller
         $vatFee = ($paymentMethod === 'cod') ? round($codFee * 0.12, 2) : 0;
 
         // Compute grand total
-        $grandTotal = max(0, $productTotal + $shippingFee - $discount);
+        $grandTotal = ($paymentMethod === 'cod')
+            ? $productTotal + $shippingFee + $valuationFee + $codFee + $vatFee - $discount
+            : max(0, $productTotal + $shippingFee - $discount);
 
-        // Save shipping
+        Log::info('Computed payment details', [
+            'payment_id' => $payment->id,
+            'payment_method' => $paymentMethod,
+            'product_total' => $productTotal,
+            'shipping_fee' => $shippingFee,
+            'valuation_fee' => $valuationFee,
+            'cod_fee' => $codFee,
+            'vat_fee' => $vatFee,
+            'discount' => $discount,
+            'grand_total' => $grandTotal,
+        ]);
+
+        // Save shipping: include all fees if COD
+        $shippingAmount = ($paymentMethod === 'cod')
+            ? $shippingFee + $valuationFee + $codFee + $vatFee
+            : $shippingFee;
+
         Shipping::updateOrCreate(
             ['payment_id' => $payment->id],
             [
                 'courier' => 'JNT',
                 'date_of_shipping' => now(),
-                'shipping_fee' => $shippingFee,
+                'shipping_fee' => $shippingAmount,
             ]
         );
+
+        Log::info('Shipping record created/updated', [
+            'payment_id' => $payment->id,
+            'shipping_fee' => $shippingAmount
+        ]);
 
         // Update payment record
         $payment->update([
             'total' => $grandTotal,
-            'shipping_fee' => $shippingFee,
+            'shipping_fee' => $shippingAmount,
             'discount' => $discount,
             'voucher_code' => $voucherCode,
             'product_total' => $productTotal,
             'payment_method' => ($paymentMethod === 'online') ? 'HitPay' : $paymentMethod,
+            'status' => ($paymentMethod === 'cod') ? 'cod_pending' : 'pending',
+        ]);
+
+        Log::info('Payment record updated', [
+            'payment_id' => $payment->id,
+            'total' => $grandTotal,
+            'payment_method' => $paymentMethod
         ]);
 
         // Increment voucher usage
         if ($voucherCode) {
             Voucher::where('code', $voucherCode)->increment('used_count');
+            Log::info('Voucher used', ['voucher_code' => $voucherCode]);
         }
 
-        /*
-     |--------------------------------------------------------------------------
-     |  ⚠️ SWITCH BETWEEN HITPAY AND J&T
-     |--------------------------------------------------------------------------
-     */
-
         if ($paymentMethod === 'cod') {
-
-            // 👍 Send to J&T
+            // Send to J&T for COD
             $this->sendToJnt($payment);
-
-            // 👍 Mark payment as COD + unpaid
-            $payment->update([
-                'status' => 'cod_pending',
-                'total' => $productTotal + $shippingFee + $valuationFee + $codFee + $vatFee - $discount,
-            ]);
+            Log::info('Order sent to J&T', ['payment_id' => $payment->id]);
 
             return redirect()->route('order_success')->with('message', 'Your COD order has been placed!');
         }
 
-        // 👍 If ONLINE, continue to HitPay
+        // ONLINE payment -> HitPay
+        Log::info('Redirecting to HitPay', ['payment_id' => $payment->id]);
         return $this->processHitpayPayment(
             $payment,
             $productIds,
@@ -914,7 +1014,6 @@ class PaymentController extends Controller
             $shippingFee
         );
     }
-
 
     public function OrderQuery($id)
     {
@@ -1391,7 +1490,7 @@ class PaymentController extends Controller
         if ($mailno) {
             $payment->update([
                 'tracking_number' => $mailno,  // make sure this column exists
-                'upload_shipping_payment' => $shippingFee,
+                // 'upload_shipping_payment' => $shippingFee,
             ]);
         } else {
             // still save shipping even if no tracking number

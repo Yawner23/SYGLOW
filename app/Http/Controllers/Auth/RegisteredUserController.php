@@ -20,6 +20,7 @@ use Illuminate\Support\Facades\Mail;
 use Illuminate\Http\RedirectResponse;
 use Illuminate\Auth\Events\Registered;
 use App\Providers\RouteServiceProvider;
+use Illuminate\Support\Facades\Http;
 
 class RegisteredUserController extends Controller
 {
@@ -36,12 +37,29 @@ class RegisteredUserController extends Controller
      *
      * @throws \Illuminate\Validation\ValidationException
      */
+
     public function store(Request $request): RedirectResponse
     {
         $commonRules = [
             'email' => ['required', 'string', 'email', 'max:255', 'unique:' . User::class],
             'password' => ['required', 'confirmed', Rules\Password::defaults()],
         ];
+
+        // Add captcha validation rules for customer and distributor
+        if (in_array($request->role, ['customer', 'distributor'])) {
+            $request->validate([
+                'g-recaptcha-response' => ['required', function ($attribute, $value, $fail) use ($request) {
+                    $response = Http::asForm()->post('https://www.google.com/recaptcha/api/siteverify', [
+                        'secret' => env('RECAPTCHA_SECRET_KEY'), // Add your secret in .env
+                        'response' => $value,
+                    ])->json();
+
+                    if (!($response['success'] ?? false)) {
+                        $fail('Captcha verification failed.');
+                    }
+                }],
+            ]);
+        }
 
         if ($request->role === 'customer') {
             $request->validate(array_merge($commonRules, [
@@ -72,11 +90,9 @@ class RegisteredUserController extends Controller
                 'role_id' => 1,
             ]);
 
-            // Generate and store OTP for customers only
             $otp = Str::random(4);
             $request->session()->put('otp', $otp);
             $request->session()->put('user_id', $user->id);
-
             Mail::to($user->email)->send(new OtpMail($otp));
 
             return redirect()->route('verify-otp');
@@ -84,7 +100,6 @@ class RegisteredUserController extends Controller
             $request->validate(array_merge($commonRules, [
                 'name' => ['required', 'string', 'max:255'],
             ]));
-
 
             $user = User::create([
                 'name' => $request->name,
@@ -98,6 +113,7 @@ class RegisteredUserController extends Controller
                 'user_id' => $user->id,
                 'role_id' => 3,
             ]);
+
             Auth::login($user);
             return redirect(RouteServiceProvider::HOME);
         } elseif ($request->role === 'distributor') {
@@ -122,7 +138,6 @@ class RegisteredUserController extends Controller
             $photoBackgroundDirectory = public_path('uploads/photo_backgrounds');
             $selfieDirectory = public_path('uploads/selfies');
 
-            // Handle valid ID upload
             if ($request->hasFile('valid_id_path')) {
                 $validIdFile = $request->file('valid_id_path');
                 $validIdName = uniqid() . '.' . $validIdFile->getClientOriginalExtension();
@@ -130,7 +145,6 @@ class RegisteredUserController extends Controller
                 $validIdPath = 'uploads/valid_ids/' . $validIdName;
             }
 
-            // Handle photo with background upload
             if ($request->hasFile('photo_with_background_path')) {
                 $photoWithBackgroundFile = $request->file('photo_with_background_path');
                 $photoWithBackgroundName = uniqid() . '.' . $photoWithBackgroundFile->getClientOriginalExtension();
@@ -138,7 +152,6 @@ class RegisteredUserController extends Controller
                 $photoWithBackgroundPath = 'uploads/photo_backgrounds/' . $photoWithBackgroundName;
             }
 
-            // Handle selfie with ID upload
             if ($request->hasFile('selfie_with_id_path')) {
                 $selfieWithIdFile = $request->file('selfie_with_id_path');
                 $selfieWithIdName = uniqid() . '.' . $selfieWithIdFile->getClientOriginalExtension();
@@ -156,28 +169,25 @@ class RegisteredUserController extends Controller
                 'email_verified_at' => null,
             ]);
 
-            // Validate 'code' based on distributor_type
             if ($request->distributor_type == 1) {
-                // distributor_type 1: code must exist in referral_code table
                 $codeExists = ReferralCode::where('referral_code', $request->code)->exists();
                 if (!$codeExists) {
                     return redirect()->back()
-                        ->withInput() // Keep the input in the form
+                        ->withInput()
                         ->withErrors(['code' => 'Referral Code does not exist']);
                 }
             } elseif ($request->distributor_type == 2 || $request->distributor_type == 3) {
-                // distributor_type != 1: code must match a user_id in distributors table
                 $codeExists = Distributor::where('distributor_type', '1')->where('user_id', $request->code)->exists();
                 if (!$codeExists) {
                     return redirect()->back()
-                        ->withInput() // Keep the input in the form
+                        ->withInput()
                         ->withErrors(['code' => 'Code does not match any existing distributor user_id']);
                 }
             } else {
                 $codeExists = Distributor::where('distributor_type', '3')->where('user_id', $request->code)->exists();
                 if (!$codeExists) {
                     return redirect()->back()
-                        ->withInput() // Keep the input in the form
+                        ->withInput()
                         ->withErrors(['code' => 'Code does not match any existing City Distributor']);
                 }
             }
@@ -202,7 +212,6 @@ class RegisteredUserController extends Controller
                 'role_id' => 2,
             ]);
 
-            // Redirect to success page with the temporary email and password
             return redirect(RouteServiceProvider::SUCCESS)->with([
                 'email' => $user->email,
                 'tempPassword' => $tempPassword,

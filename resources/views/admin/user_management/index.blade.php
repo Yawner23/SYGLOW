@@ -34,7 +34,7 @@
                                         <th scope="col" class="px-4 py-3.5 text-sm font-normal text-left text-gray-500">Email</th>
                                         <th scope="col" class="px-4 py-3.5 text-sm font-normal text-left text-gray-500">Status</th>
                                         <th scope="col" class="px-4 py-3.5 text-sm font-normal text-left text-gray-500">Actions</th>
-                                        <th scope="col" class="px-4 py-3.5 text-sm font-normal text-left text-gray-500">Referral Code</th>
+                                        <!-- <th scope="col" class="px-4 py-3.5 text-sm font-normal text-left text-gray-500">Referral Code</th> -->
                                     </tr>
                                 </thead>
                                 <tbody class="bg-white divide-y divide-gray-200"></tbody>
@@ -140,10 +140,6 @@
                         orderable: false,
                         searchable: false
                     },
-                    {
-                        data: 'referral_code',
-                        name: 'referral_code'
-                    } // Add referral_code column
                 ]
             });
 

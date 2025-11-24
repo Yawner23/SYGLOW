@@ -20,7 +20,7 @@
     <div class="container relative z-50 max-w-screen-lg mx-auto">
         <div class="relative grid grid-cols-1 -space-x-1 md:grid-cols-2">
             <div>
-                <img class="object-cover w-full hidden md:block h-[40rem] rounded-l-3xl" src="{{ asset('images/Order-Img.jpg') }}" alt="">
+                <img class="object-cover w-full hidden md:block h-[40rem] rounded-l-3xl" src="{{ asset('images/Login-img.jpg') }}" alt="">
             </div>
             <div class="relative">
                 <img class="absolute z-0 w-full h-full" src="{{ asset('images/Login-Card-2.png') }}" alt="">

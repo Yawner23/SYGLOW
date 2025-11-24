@@ -4,6 +4,8 @@ namespace App\Http\Controllers;
 
 use App\Models\ContactUs;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\Http;
+use Illuminate\Support\Facades\Log;
 use Yajra\DataTables\DataTables;
 
 class ContactUsController extends Controller
@@ -41,16 +43,42 @@ class ContactUsController extends Controller
 
     public function store_contact_us(Request $request)
     {
-        // Validate the incoming request data
+        // Validate form inputs
         $validatedData = $request->validate([
             'name' => 'required|string|max:255',
             'email' => 'required|email|max:255',
             'phone_number' => 'nullable|string|max:20',
             'comment' => 'required|string|max:1000',
+            'g-recaptcha-response' => ['required', function ($attribute, $value, $fail) use ($request) {
+                $response = Http::asForm()->post('https://www.google.com/recaptcha/api/siteverify', [
+                    'secret' => env('RECAPTCHA_SECRET_KEY'), // Add your secret key in .env
+                    'response' => $value,
+                ])->json();
+
+                if (!($response['success'] ?? false)) {
+                    Log::warning('Contact Us captcha failed', [
+                        'email' => $request->email,
+                        'ip' => $request->ip(),
+                        'response' => $response,
+                    ]);
+                    $fail('Captcha verification failed.');
+                } else {
+                    Log::info('Contact Us captcha passed', [
+                        'email' => $request->email,
+                        'ip' => $request->ip(),
+                    ]);
+                }
+            }],
         ]);
 
-        // Create the contact record using the validated data
+        // Create the contact record
         ContactUs::create($validatedData);
+
+        Log::info('Contact Us form submitted', [
+            'email' => $request->email,
+            'name' => $request->name,
+            'ip' => $request->ip(),
+        ]);
 
         // Redirect back with a success message
         return redirect()->back()->with('success', 'Your message has been submitted successfully!');

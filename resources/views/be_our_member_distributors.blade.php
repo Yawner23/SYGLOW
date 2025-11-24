@@ -182,6 +182,13 @@
                 </div>
             </div>
 
+            <div class="mb-6">
+                <div class="g-recaptcha" data-sitekey="{{ env('RECAPTCHA_SITEKEY') }}"></div>
+                @error('g-recaptcha-response')
+                <p class="mt-2 text-sm text-red-600">{{ $message }}</p>
+                @enderror
+            </div>
+
             <div class="flex justify-center col-span-2 py-20">
                 <button type="submit" class="bg-gradient-to-r from-[#f590b0] to-[#f56e98] rounded-lg w-80 py-2 text-white border-2 border-white">Submit</button>
             </div>
@@ -192,6 +199,7 @@
 @include('layouts.member')
 @include('layouts.footer')
 
+<script src="https://www.google.com/recaptcha/api.js" async defer></script>
 <script>
     document.addEventListener('DOMContentLoaded', function() {
         function previewImage(input, previewId) {

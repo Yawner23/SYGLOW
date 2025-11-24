@@ -66,6 +66,13 @@
                     <span class="mt-1 text-sm text-red-500">{{ $message }}</span>
                     @enderror
                 </div>
+
+                <div class="mb-6">
+                    <div class="g-recaptcha" data-sitekey="{{ env('RECAPTCHA_SITEKEY') }}"></div>
+                    @error('g-recaptcha-response')
+                    <p class="mt-2 text-sm text-red-600">{{ $message }}</p>
+                    @enderror
+                </div>
             </div>
             <div class="flex items-center justify-center my-12">
                 <button type="submit" class="bg-gradient-to-r from-[#f590b0] to-[#f56e98] rounded-lg w-full md:w-60 py-2 text-white border-2 border-white">
@@ -77,11 +84,13 @@
     </div>
 
     <div class="container relative max-w-screen-xl mx-auto py-20" data-aos="zoom-in" data-aos-duration="1500">
-       
+
         <iframe class="w-full" src="https://www.google.com/maps/embed?pb=!1m18!1m12!1m3!1d3959.1681466510367!2d125.63352577571504!3d7.106503216112525!2m3!1f0!2f0!3f0!3m2!1i1024!2i768!4f13.1!3m3!1m2!1s0x32f96d65a9ac63f1%3A0x7c4976dd028b3501!2sSYJL%20RICH8%20TRADING!5e0!3m2!1sen!2sph!4v1727944777964!5m2!1sen!2sph" height="450" style="border:0;" allowfullscreen="" loading="lazy" referrerpolicy="no-referrer-when-downgrade"></iframe>
     </div>
 </div>
 
 @include('layouts.member')
 @include('layouts.footer')
+
+<script src="https://www.google.com/recaptcha/api.js" async defer></script>
 @endsection

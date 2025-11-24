@@ -90,7 +90,12 @@
                     <label for="brgy" class="block text-sm font-medium text-gray-700">Barangay</label>
                     <input type="text" name="brgy" id="brgy" class="block w-full p-2 mt-1 border border-gray-300 rounded-lg">
                 </div>
+                <div>
+                    <label for="code" class="block text-sm font-medium text-gray-700">Referral Code</label>
+                    <input type="text" name="code" id="code" class="block w-full p-2 mt-1 border border-gray-300 rounded-lg">
+                </div>
             </div>
+
 
             <!-- Single Contact Number field for both roles -->
             <div class="mb-4">
@@ -107,6 +112,7 @@
         const customerFields = document.getElementById('customer-fields');
         const distributorFields = document.getElementById('distributor-fields');
         const contactNumber = document.getElementById('contact_number');
+        const codeField = document.getElementById('code'); // Referral code input
 
         function toggleFields() {
             const selectedRole = roleSelect.options[roleSelect.selectedIndex].text.toLowerCase();
@@ -117,20 +123,24 @@
                 contactNumber.required = true;
                 customerFields.querySelectorAll('input').forEach(el => el.required = true);
                 distributorFields.querySelectorAll('input, select').forEach(el => el.required = false);
+                if (codeField) codeField.required = false; // make code not required
             } else if (selectedRole === 'distributor') {
                 distributorFields.classList.remove('hidden');
                 customerFields.classList.add('hidden');
                 contactNumber.required = true;
                 distributorFields.querySelectorAll('input, select').forEach(el => el.required = true);
                 customerFields.querySelectorAll('input').forEach(el => el.required = false);
+                if (codeField) codeField.required = true; // make code required
             } else {
                 customerFields.classList.add('hidden');
                 distributorFields.classList.add('hidden');
                 contactNumber.required = false;
+                if (codeField) codeField.required = false;
             }
         }
 
         roleSelect.addEventListener('change', toggleFields);
         toggleFields(); // trigger on load
     </script>
+
 </x-app-layout>

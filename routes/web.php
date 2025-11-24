@@ -170,6 +170,7 @@ Route::group(['middleware' => ['permission:distributor']], function () {
     Route::get('/distributor_ordered_items/{customer_id}', [PageController::class, 'distributor_ordered_items']);
     Route::get('/distributor_check_out', [PageController::class, 'distributor_check_out'])->name('payment.success');
     Route::get('/distributor_payment_summary/{id}', [PageController::class, 'distributor_payment_summary']);
+    Route::post('/calculate-shipping-fee', [PaymentController::class, 'calculateShippingFee'])->name('calculate.shipping_fee');
     Route::post('/payment_summary', [PaymentController::class, 'payment_summary'])->name('save.payment_summary');
     Route::get('/checkout', [CartController::class, 'showCheckout'])->name('checkout');
     Route::post('/payments/upload-payment', [PaymentController::class, 'uploadPayment'])->name('payments.uploadPayment');
