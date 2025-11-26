@@ -50,8 +50,8 @@
                         name: 'customer.name'
                     },
                     {
-                        data: 'delivery_address.deliver_name',
-                        name: 'delivery_address.deliver_name'
+                        data: 'delivery_address.full_address',
+                        name: 'delivery_address.full_address'
                     },
                     {
                         data: 'total',

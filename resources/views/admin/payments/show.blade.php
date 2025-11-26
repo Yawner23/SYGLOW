@@ -21,7 +21,7 @@
 
         <div class="py-2 border-t border-gray-200">
             <p class="text-sm font-semibold">Delivery Address:</p>
-            <p class="text-lg text-gray-800">{{ $payment->deliveryAddress->deliver_name }}</p>
+            <p class="text-lg text-gray-800">{{ $payment->deliveryAddress->full_address }}</p>
         </div>
 
         <div class="py-2 border-t border-gray-200">

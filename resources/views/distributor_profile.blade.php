@@ -75,15 +75,29 @@
                     <p class=""> {{ Auth::user()->email }}</p>
                 </div>
                 <div class="flex justify-between">
-                    <h1 class="font-semibold ">Distributor Type:</h1>
+                    <h1 class="font-semibold">Distributor Type:</h1>
                     <p>
                         @if(Auth::user()->distributor)
-                        {{ Auth::user()->distributor->distributor_type }}
+                        @switch(Auth::user()->distributor->distributor_type)
+                        @case(1)
+                        Regional Distributor
+                        @break
+                        @case(2)
+                        Provincial Distributor
+                        @break
+                        @case(3)
+                        City Distributor
+                        @break
+                        @case(4)
+                        Reseller Distributor
+                        @break
+                        @default
+                        N/A
+                        @endswitch
                         @else
                         N/A
                         @endif
                     </p>
-
                 </div>
                 <div class="flex justify-between">
                     <h1 class="font-semibold ">Contact Number:</h1>

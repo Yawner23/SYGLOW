@@ -408,7 +408,6 @@ class ProductController extends Controller
         // Update consumer prices
         // Update consumer prices
         ProductPrice::where('product_id', $product->id)->delete();
-
         Log::info("💵 Clearing old prices for product {$product->id}");
 
         if ($request->has('consumers')) {
@@ -422,7 +421,8 @@ class ProductController extends Controller
 
                 // Customer only discount (ID = 5)
                 $discountPrice = null;
-                if ($consumerId == 5) {
+                if ($consumerId == 5 && $request->has('enable_discount.5')) {
+                    // Only set discount price if checkbox is checked
                     $discountPrice = $request->input('discount_price.' . $consumerId);
                 }
 

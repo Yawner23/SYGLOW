@@ -99,7 +99,7 @@
                 <img class="my-4" src="{{asset('images/wishlist-line.png')}}" alt="">
 
                 <div class="relative grid grid-cols-1 gap-6 md:grid-cols-3 lg:grid-cols-3">
-                    @foreach ($products as $product)
+                    @foreach ($products->where('quantity', '>', 0) as $product)
                     @php
                     $hasImages = $product->images->isNotEmpty();
                     $firstImage = $hasImages ? $product->images->first() : null;

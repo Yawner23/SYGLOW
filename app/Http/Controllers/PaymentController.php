@@ -147,14 +147,14 @@ class PaymentController extends Controller
             'product_id.*' => 'exists:products,id',
             'quantity.*' => 'integer|min:1',
             'voucher_code' => 'nullable|string',
-            'payment_method' => 'nullable', // no more error
+            'payment_method' => 'nullable',
         ]);
 
         $discount = 0;
 
         /*
     |--------------------------------------------------------------------------
-    | APPLY VOUCHER CODE
+    | APPLY VOUCHER
     |--------------------------------------------------------------------------
     */
         if ($request->filled('voucher_code')) {
@@ -184,57 +184,70 @@ class PaymentController extends Controller
             $voucher->used_count = $usedCount + 1;
             $voucher->save();
 
-            Log::info('🎟 Voucher Applied', [
-                'voucher' => $voucher->code,
-                'discount' => $discount
-            ]);
+            Log::info('🎟 Voucher Applied', ['voucher' => $voucher->code, 'discount' => $discount]);
         }
 
         /*
     |--------------------------------------------------------------------------
-    | COMPUTE SHIPPING FEE BASED ON ADDRESS + WEIGHT
+    | COMPUTE SHIPPING WEIGHT
     |--------------------------------------------------------------------------
     */
         $address = DeliveryAddress::find($validatedData['delivery_address_id']);
-
         $region = $this->mapProvinceToRegion($address->province);
 
-        // compute weight of all products
         $totalWeight = 0;
+
         foreach ($request->product_id as $index => $prodId) {
             $weight = DB::table('products_weights')->where('product_id', $prodId)->first();
 
             if ($weight) {
-                $w = strtolower($weight->weight_unit) == 'g'
-                    ? $weight->weights / 1000
-                    : $weight->weights;
+
+                // FIX: Detect units flexibly (Grams / Kilograms)
+                $unit = strtolower(trim($weight->weight_unit));
+
+                if (in_array($unit, ['g', 'gram', 'grams'])) {
+                    $w = $weight->weights / 1000; // convert grams to kg
+                } elseif (in_array($unit, ['kg', 'kilo', 'kilogram', 'kilograms'])) {
+                    $w = $weight->weights;       // already in kg
+                } else {
+                    $w = $weight->weights;       // fallback
+                }
 
                 $totalWeight += $w * $request->quantity[$index];
+
+                Log::info('🛒 Weight Computed', [
+                    'product_id' => $prodId,
+                    'raw_value' => $weight->weights . ' ' . $weight->weight_unit,
+                    'converted_to_kg' => $w,
+                    'quantity' => $request->quantity[$index],
+                    'added_weight' => $w * $request->quantity[$index]
+                ]);
             }
         }
 
-        // round weight to nearest 0.5kg
+        // Round to nearest 0.5kg
         $totalWeight = ceil($totalWeight * 2) / 2;
 
         $shippingFee = $this->computeShippingFee($region, $totalWeight);
 
         Log::info('🚚 Shipping Fee Computed', [
             'region' => $region,
-            'total_weight' => $totalWeight,
+            'total_weight' => $totalWeight,   // NOW CORRECT → 6.5
             'shipping_fee' => $shippingFee
         ]);
 
-
         /*
     |--------------------------------------------------------------------------
-    | CREATE PAYMENT
+    | CREATE PAYMENT RECORD
     |--------------------------------------------------------------------------
     */
+        $productTotal = array_sum($request->subtotal); // FIXED CALCULATION
+
         $payment = Payment::create([
             'customer_id' => $validatedData['customer_id'],
             'delivery_address_id' => $validatedData['delivery_address_id'],
-            'payment_method' => 'HitPay', // hardcoded as Hitpay
-            'total' => $validatedData['total'] + $shippingFee,
+            'payment_method' => 'HitPay',
+            'total' => $productTotal + $shippingFee, // FIXED TOTAL = 302 + 505 = 807
             'discount' => $discount,
             'shipping_fee' => $shippingFee,
             'status' => 'unpaid',
@@ -244,13 +257,13 @@ class PaymentController extends Controller
 
         Log::info('💰 Payment Record Created', [
             'payment_id' => $payment->id,
-            'total' => $payment->total,
-            'payment_method' => $payment->payment_method, // optional logging
+            'total' => $payment->total, // NOW CORRECT
+            'payment_method' => $payment->payment_method,
         ]);
 
         /*
     |--------------------------------------------------------------------------
-    | SAVE ALL PRODUCTS
+    | SAVE PRODUCTS
     |--------------------------------------------------------------------------
     */
         foreach ($request->product_id as $key => $productId) {
@@ -264,7 +277,7 @@ class PaymentController extends Controller
 
         /*
     |--------------------------------------------------------------------------
-    | CREATE SHIPPING TABLE ENTRY
+    | SHIPPING TABLE ENTRY
     |--------------------------------------------------------------------------
     */
         Shipping::create([
@@ -281,7 +294,7 @@ class PaymentController extends Controller
 
         /*
     |--------------------------------------------------------------------------
-    | REDIRECT TO HITPAY OR SUCCESS PAGE
+    | REDIRECT TO HITPAY
     |--------------------------------------------------------------------------
     */
         return $this->processHitpayPayment(
@@ -292,41 +305,83 @@ class PaymentController extends Controller
             $shippingFee
         );
     }
+
     // ------------------DISTRIBUTOR SIDE---------------------------
     public function calculateShippingFee(Request $request)
     {
+        Log::info('🚚 Shipping Fee Calculation Started', [
+            'address_id' => $request->address_id,
+            'cart' => session('cart', [])
+        ]);
+
         $addressId = $request->address_id;
         $cart = session('cart', []);
 
         if (!$addressId || empty($cart)) {
+            Log::warning('❌ Shipping Fee Error: Missing address or cart');
             return response()->json(['error' => 'Address or cart not found.'], 400);
         }
 
         $address = DeliveryAddress::find($addressId);
         if (!$address) {
+            Log::warning('❌ Shipping Fee Error: Address not found', ['address_id' => $addressId]);
             return response()->json(['error' => 'Address not found.'], 404);
         }
 
         $region = $this->mapProvinceToRegion($address->province);
 
+        Log::info('📍 Region Mapped', [
+            'province' => $address->province,
+            'region' => $region
+        ]);
+
         // compute total weight
         $totalWeight = 0;
         foreach ($cart as $id => $item) {
+
             $weightData = DB::table('products_weights')->where('product_id', $id)->first();
+
             if ($weightData) {
-                $weight = strtolower($weightData->weight_unit) === 'g' ? $weightData->weights / 1000 : $weightData->weights;
-                $totalWeight += $weight * $item['quantity'];
+
+                // FIXED ❗ Normalize weight unit and convert grams → kilograms properly
+                $unit = strtolower(trim($weightData->weight_unit));
+
+                if ($unit === 'grams' || $unit === 'g') {
+                    $weight = $weightData->weights / 1000; // convert grams to kg
+                } else { // kilograms or kg
+                    $weight = $weightData->weights;
+                }
+
+                $itemTotalWeight = $weight * $item['quantity'];
+                $totalWeight += $itemTotalWeight;
+
+                Log::info('🛒 Cart Item Processed', [
+                    'product_id' => $id,
+                    'raw_value' => $weightData->weights . ' ' . $weightData->weight_unit,
+                    'converted_to_kg' => $weight,
+                    'quantity' => $item['quantity'],
+                    'computed_weight' => $itemTotalWeight
+                ]);
+            } else {
+                Log::warning('⚠ No weight record found for product', ['product_id' => $id]);
             }
         }
 
         $totalWeight = ceil($totalWeight * 2) / 2;
         $shippingFee = $this->computeShippingFee($region, $totalWeight);
 
+        Log::info('✅ Shipping Fee Computed', [
+            'final_weight' => $totalWeight,
+            'shipping_fee' => $shippingFee
+        ]);
+
         return response()->json([
             'shipping_fee' => $shippingFee,
             'display' => '₱' . number_format($shippingFee, 2),
         ]);
     }
+
+
 
     //  --------------CUSTOMER SIDE-------------------
     public function payment(Request $request)
@@ -899,7 +954,7 @@ class PaymentController extends Controller
             'payment_method' => 'required|string'
         ]);
 
-        $paymentMethod = $request->input('payment_method'); // 👈 CHECK PAYMENT METHOD
+        $paymentMethod = $request->input('payment_method');
         $productIds = json_decode($request->input('product_ids'), true);
         $subtotals = json_decode($request->input('subtotals'), true);
         $discount = (float)$request->input('discount', 0);
@@ -954,7 +1009,7 @@ class PaymentController extends Controller
             'grand_total' => $grandTotal,
         ]);
 
-        // Save shipping: include all fees if COD
+        // Save shipping info
         $shippingAmount = ($paymentMethod === 'cod')
             ? $shippingFee + $valuationFee + $codFee + $vatFee
             : $shippingFee;
@@ -968,11 +1023,6 @@ class PaymentController extends Controller
             ]
         );
 
-        Log::info('Shipping record created/updated', [
-            'payment_id' => $payment->id,
-            'shipping_fee' => $shippingAmount
-        ]);
-
         // Update payment record
         $payment->update([
             'total' => $grandTotal,
@@ -984,12 +1034,6 @@ class PaymentController extends Controller
             'status' => ($paymentMethod === 'cod') ? 'cod_pending' : 'pending',
         ]);
 
-        Log::info('Payment record updated', [
-            'payment_id' => $payment->id,
-            'total' => $grandTotal,
-            'payment_method' => $paymentMethod
-        ]);
-
         // Increment voucher usage
         if ($voucherCode) {
             Voucher::where('code', $voucherCode)->increment('used_count');
@@ -997,9 +1041,16 @@ class PaymentController extends Controller
         }
 
         if ($paymentMethod === 'cod') {
-            // Send to J&T for COD
+            // Send to J&T
             $this->sendToJnt($payment);
             Log::info('Order sent to J&T', ['payment_id' => $payment->id]);
+
+            // ✅ Deduct product stock immediately for COD
+            foreach ($payment->products as $p) {
+                if ($p->product) {
+                    $p->product->decrement('quantity', $p->quantity);
+                }
+            }
 
             return redirect()->route('order_success')->with('message', 'Your COD order has been placed!');
         }
@@ -1014,6 +1065,7 @@ class PaymentController extends Controller
             $shippingFee
         );
     }
+
 
     public function OrderQuery($id)
     {
@@ -1040,7 +1092,7 @@ class PaymentController extends Controller
         $totalWeight = ceil($totalWeight * 2) / 2; // round up to nearest 0.5 kg
 
         // Compute shipping fee (local estimate)
-        $localFee = $this->computeShippingFee($region, $totalWeight);
+        // $localFee = $this->computeShippingFee($region, $totalWeight);
 
         // Compute product total
         $productTotal = $payment->products->sum('subtotal');
@@ -1048,8 +1100,8 @@ class PaymentController extends Controller
 
         // Compute valuation, COD, and VAT fees
         $valuationFee = round($declaredValue * 0.01, 2); // 1% valuation
-        $codFee = round(($declaredValue + $localFee + $valuationFee) * 0.0275, 2); // 2.75% COD fee
-        $vatFee = round($codFee * 0.12, 2); // 12% VAT on COD fee
+        // $codFee = round(($declaredValue + $localFee + $valuationFee) * 0.0275, 2); // 2.75% COD fee
+        // $vatFee = round($codFee * 0.12, 2); // 12% VAT on COD fee
 
         // Get discount if any
         $discount = $payment->discount ?? 0;
@@ -1083,10 +1135,10 @@ class PaymentController extends Controller
             Log::error('J&T API OrderQuery failed: ' . $e->getMessage(), ['order_id' => $id]);
         }
 
-        $shippingFee = $jtFee ?? $localFee;
+        // $shippingFee = $jtFee ?? $localFee;
 
-        // Compute grand total including all fees minus discount
-        $grandTotal = $productTotal + $shippingFee + $valuationFee + $codFee + $vatFee - $discount;
+        // // Compute grand total including all fees minus discount
+        // $grandTotal = $productTotal + $shippingFee + $valuationFee + $codFee + $vatFee - $discount;
 
         // Log all computed values
         Log::info('OrderQuery Computation', [
@@ -1097,8 +1149,8 @@ class PaymentController extends Controller
             'product_total' => $productTotal,
             'shipping_fee' => $shippingFee,
             'valuation_fee' => $valuationFee,
-            'cod_fee' => $codFee,
-            'vat_fee' => $vatFee,
+            // 'cod_fee' => $codFee,
+            // 'vat_fee' => $vatFee,
             'discount' => $discount,
             'grand_total' => $grandTotal,
         ]);
@@ -1112,8 +1164,8 @@ class PaymentController extends Controller
             'product_total' => round($productTotal, 2),
             'shipping_fee' => round($shippingFee, 2),
             'valuation_fee' => round($valuationFee, 2),
-            'cod_fee' => round($codFee, 2),
-            'vat_fee' => round($vatFee, 2),
+            // 'cod_fee' => round($codFee, 2),
+            // 'vat_fee' => round($vatFee, 2),
             'discount' => round($discount, 2),
             'grand_total' => round($grandTotal, 2),
             'display' => '₱' . number_format($grandTotal, 2),
@@ -1682,7 +1734,7 @@ class PaymentController extends Controller
     public function verifyHitpayPayment(Request $request)
     {
         $paymentId = Session::get('payment_id');
-        $payment = Payment::findOrFail($paymentId);
+        $payment = Payment::with('products.product')->findOrFail($paymentId);
 
         $response = Http::withHeaders([
             'X-BUSINESS-API-KEY' => env('HITPAY_API_KEY'),
@@ -1692,10 +1744,18 @@ class PaymentController extends Controller
         $responseData = $response->json();
 
         if ($response->successful() && $responseData['status'] === 'completed') {
+            // ✅ Mark payment as completed
             $payment->update([
                 'status' => 'Paid',
                 'payment_method' => $responseData['payment_method'] ?? 'HitPay',
             ]);
+
+            // ✅ Deduct stock AFTER successful payment
+            foreach ($payment->products as $p) {
+                if ($p->product) {
+                    $p->product->decrement('stock', $p->quantity);
+                }
+            }
 
             Session::forget('cart');
 
@@ -1706,7 +1766,6 @@ class PaymentController extends Controller
                 Log::error('❌ Failed to send J&T order: ' . $e->getMessage());
             }
 
-            // Fetch products and subtotals
             $payment_products = PaymentProduct::where('payment_id', $paymentId)->get();
             $subtotals = $payment_products->pluck('subtotal');
             $delivery_address = DeliveryAddress::where('id', $payment->delivery_address_id)
@@ -1714,12 +1773,12 @@ class PaymentController extends Controller
                 ->first();
 
             return view('success_purchase', [
-                'transaction_id'   => $payment->transaction_id,
-                'payment_id'       => $payment->id,
-                'subtotals'        => $subtotals,
-                'amountPaid'       => $payment->total,
-                'delivery_address' => $delivery_address,
-                'payment_method'   => $payment->payment_method,
+                'transaction_id'    => $payment->transaction_id,
+                'payment_id'        => $payment->id,
+                'subtotals'         => $subtotals,
+                'amountPaid'        => $payment->total,
+                'delivery_address'  => $delivery_address,
+                'payment_method'    => $payment->payment_method,
                 'clearLocalStorage' => true,
             ]);
         } else {
@@ -1728,6 +1787,7 @@ class PaymentController extends Controller
             ]);
         }
     }
+
 
     private function sendToJnt($payment)
     {
@@ -1739,7 +1799,7 @@ class PaymentController extends Controller
                 return;
             }
 
-            // ✅ Compute total weight using the same logic as OrderQuery
+            // ✅ Compute total weight
             $totalWeightKg = DB::table('payment_product')
                 ->join('products', 'payment_product.product_id', '=', 'products.id')
                 ->join('products_weights', 'products.id', '=', 'products_weights.product_id')
@@ -1753,35 +1813,56 @@ class PaymentController extends Controller
             ) as total_kg'))
                 ->value('total_kg') ?? 0;
 
-            // Round up to nearest 0.5 kg (same as shipping calculation)
             $totalWeightKg = ceil($totalWeightKg * 2) / 2;
 
-            // ✅ Compute goods value (product total without discount)
-            $goodsValue = $payment->products->sum('subtotal');
+            // ✅ Prepare items array (products + shipping fee)
+            $items = $payment->products->map(function ($p) {
+                return [
+                    "itemname" => $p->product->product_name ?? $p->product_name,
+                    "number" => $p->product_id,
+                    "itemquantity" => $p->quantity ?? 1,
+                    "itemvalue" => $p->subtotal ?? $p->price,
+                ];
+            })->toArray();
 
+            // Add shipping fee as separate line item
+            $shippingFee = $payment->shipping_fee ?? 0;
+            if ($shippingFee > 0) {
+                $items[] = [
+                    "itemname" => "Shipping Fee",
+                    "number" => "SHIPPING",
+                    "itemquantity" => 1,
+                    "itemvalue" => $shippingFee,
+                ];
+            }
+
+            // ✅ Compute goods value (sum of all items)
+            $goodsValue = collect($items)->sum(fn($i) => $i['itemvalue'] * $i['itemquantity']);
+
+            // ✅ Prepare J&T payload
             $data = [
                 [
                     "txlogisticid" => (string) $payment->id,
                     "ordertype" => "1",
                     "serviceType" => "02",
-                    "weight" => (string) $totalWeightKg,  // ✅ correct weight
+                    "weight" => (string) $totalWeightKg,
                     "sender" => [
                         "name" => "RWEB SOLUTIONS",
                         "mobile" => "09123456789",
                         "prov" => "Metro Manila",
                         "city" => "Quezon City",
-                        "address" => "Your store address here"
+                        "address" => "Your store address here",
                     ],
                     "receiver" => [
                         "name" => $deliveryAddress->deliver_name ?? 'Customer',
                         "mobile" => $deliveryAddress->contact_no ?? 'N/A',
                         "prov" => $deliveryAddress->province ?? 'N/A',
                         "city" => $deliveryAddress->city ?? 'N/A',
-                        "address" => $deliveryAddress->full_address ?? 'N/A'
+                        "address" => $deliveryAddress->full_address ?? 'N/A',
                     ],
-                    "goodsvalue" => $goodsValue,           // ✅ correct goods value
-                    "itemquantity" => $payment->products->sum('quantity') ?? 1,
-                    "itemname" => "Online Order #" . $payment->id
+                    "goodsvalue" => $goodsValue,
+                    "itemquantity" => count($items),
+                    "items" => $items, // J&T expects array of products
                 ]
             ];
 
@@ -1789,28 +1870,34 @@ class PaymentController extends Controller
             $customerid = "CS-V0286";
             $privateKey = "SXFeeGkwwjbra5AYAxx8b1VZHKmEHBJIK7seh6NRyhqRUDqTqqBcOlBfZ8foUXHD";
 
-            // Convert data to JSON string
             $jsonData = json_encode($data, JSON_UNESCAPED_UNICODE);
-
-            // Correct digest computation
             $digest = base64_encode(md5($eccompanyid . $jsonData . $privateKey));
 
             $payload = [
                 "eccompanyid" => $eccompanyid,
                 "customerid" => $customerid,
                 "digest" => $digest,
-                "data" => $jsonData
+                "data" => $jsonData,
             ];
 
-            // Send to J&T API
+            // ✅ Send POST request to J&T
             $response = Http::withHeaders([
                 "Content-Type" => "application/json"
             ])->post("https://demostandard.jtexpress.ph/jts-phl-order-api/api/order/create", $payload);
 
             $result = $response->json();
 
-            if ($response->successful() && isset($result['code']) && $result['code'] == '1') {
+            if ($response->successful() && isset($result['responseitems'][0]['success']) && $result['responseitems'][0]['success'] === "true") {
                 Log::info('✅ J&T order created successfully', $result);
+
+                // Save tracking number
+                $mailno = $result['responseitems'][0]['mailno'] ?? null;
+                if ($mailno) {
+                    $payment->update([
+                        'tracking_number' => $mailno,
+                        'shipping_fee' => $shippingFee,
+                    ]);
+                }
             } else {
                 Log::error('❌ J&T order failed', [
                     'payload' => $payload,
