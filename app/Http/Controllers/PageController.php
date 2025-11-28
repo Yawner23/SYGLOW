@@ -486,10 +486,14 @@ class PageController extends Controller
 
     public function distributor_ordered_items($customer_id)
     {
-        $payments = Payment::where('customer_id', $customer_id)->with('products')->get();
+        $payments = Payment::where('customer_id', $customer_id)
+            ->with('products')
+            ->orderBy('created_at', 'desc') // latest first
+            ->get();
 
         return view('distributor_ordered_items', compact('payments'));
     }
+
     public function distributor_applied_distributor(Request $request)
     {
         // Get the search query from the request

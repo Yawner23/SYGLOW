@@ -13,7 +13,7 @@
         <button id="paymentSummary_button" class="bg-gradient-to-r from-[#f590b0] to-[#f56e98] rounded-l-lg px-12 py-2 text-white">
             PAYMENT SUMMARY
         </button>
-        <button id="shipping_button" class="px-12 py-2 border-[#f590b0] border-2 text-black bg-white rounded-r-lg">
+        <button id="shipping_button" class="px-12 py-2 border-[#f590b0] border-2 text-black bg-white rounded-r-lg" hidden>
             SHIPPING
         </button>
     </div>
@@ -43,8 +43,15 @@
             <div class="hidden border-b border-black border-dashed lg:block"></div>
             <ul class="grid grid-cols-2">
                 <li>Bundled Items Total:</li>
-                <li>₱ {{$payment->total}}</li>
+                <li>₱ {{ number_format($payment->products->sum('subtotal'), 2) }}</li>
 
+                <li>Shipping Fee:</li>
+                <li>₱ {{ number_format($payment->shipping->shipping_fee ?? 0, 2) }}</li>
+            </ul>
+            <div class="hidden border-b border-black border-dashed lg:block"></div>
+            <ul class="grid grid-cols-2">
+                <li>Grand Total</li>
+                <li>₱ {{$payment->total}}</li>
             </ul>
             <div class="hidden border-b border-black border-dashed lg:block"></div>
         </div>
@@ -60,7 +67,7 @@
         </div>
     </section>
 
-    <section id="shipping" class="hidden">
+    <!-- <section id="shipping" class="hidden">
         <div class="border bg-[#fdebdd] px-8 pt-4 pb-20 rounded-xl text-black space-y-4 my-8">
             <h1 class="text-2xl font-bold text-center">SHIPPING</h1>
             <div class="hidden border-b border-black border-dashed lg:block"></div>
@@ -86,17 +93,15 @@
             <div class="hidden border-b border-black border-dashed lg:block"></div>
         </div>
         <div class="relative">
-            <!-- Hidden file input -->
             <input type="file" id="upload_shipping_payment" name="upload_shipping_payment" class="absolute inset-0 opacity-0 cursor-pointer"
                 @if(!$payment->shipping || !$payment->shipping->id && !$payment->shipping->shipping_fee && !$payment->shipping->created_at) disabled @endif />
 
-            <!-- Styled button -->
             <button type="button" id="uploadButton2" class="bg-gradient-to-r from-[#f590b0] to-[#f56e98] rounded-lg px-12 py-2 text-white 
                @if(!$payment->shipping || !$payment->shipping->id && !$payment->shipping->shipping_fee && !$payment->shipping->created_at) opacity-50 cursor-not-allowed @endif">
                 UPLOAD SHIPPING PAYMENT
             </button>
         </div>
-    </section>
+    </section> -->
 
     <div>
 

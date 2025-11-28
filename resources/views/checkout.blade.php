@@ -19,6 +19,11 @@
 
             {{-- Delivery Section --}}
             <div class="p-8 bg-white rounded shadow space-y-6">
+                <div class="mb-4">
+                    <a href="{{ url('/distributor_purchase') }}" class="inline-block px-4 py-2 bg-gray-200 rounded font-bold hover:bg-gray-300">
+                        &larr; Back to Products
+                    </a>
+                </div>
                 <div class="flex items-center justify-between">
                     <h1 class="text-xl font-bold">Delivery</h1>
                     <button id="change-address-button" class="bg-gradient-to-r from-[#f590b0] to-[#f56e98] rounded-lg w-1/4 py-2 text-white flex items-center justify-center gap-2">
@@ -48,6 +53,18 @@
             {{-- Cart & Confirm Payment --}}
             <form id="checkoutForm" action="{{ route('save.payment_summary') }}" method="POST" class="p-8 bg-white rounded shadow space-y-6">
                 @csrf
+
+                @if(session('payment_verified'))
+                <div class="alert alert-success">
+                    {{ session('message') }}
+                </div>
+                @endif
+
+                @if($errors->any())
+                <div class="alert alert-danger">
+                    {{ $errors->first() }}
+                </div>
+                @endif
 
                 {{-- Cart Items --}}
                 @foreach($cart as $id => $product)
@@ -86,7 +103,6 @@
                 {{-- Confirm Payment Button --}}
                 <button type="button" id="showOrderSummary" class="w-full py-2 bg-[#f590b0] text-white rounded-lg font-bold">Confirm Payment</button>
             </form>
-
         </div>
     </div>
 </div>
@@ -97,6 +113,10 @@
         <h2 class="text-2xl font-bold text-center border-b pb-2 mb-4">Order Summary</h2>
         <div class="space-y-4">
             <div id="modalProducts"></div>
+            <div class="flex justify-between">
+                <p>Weight</p>
+                <p id="modalWeight">0</p>
+            </div>
             <div class="flex justify-between">
                 <p>Shipping Fee</p>
                 <p id="modalShippingFee">₱0.00</p>
@@ -115,7 +135,7 @@
 
 <script>
     document.addEventListener("DOMContentLoaded", () => {
-        // Ensure cart is an array
+
         const cartData = @json($cart);
         const cart = Array.isArray(cartData) ? cartData : Object.values(cartData);
         const totalAmount = parseFloat(@json($totalAmount));
@@ -124,6 +144,7 @@
         const modal = document.getElementById("orderSummaryModal");
         const modalProducts = document.getElementById("modalProducts");
         const modalShippingFee = document.getElementById("modalShippingFee");
+        const modalWeight = document.getElementById("modalWeight");
         const modalGrandTotal = document.getElementById("modalGrandTotal");
         const hiddenShippingFee = document.getElementById("hiddenShippingFee");
         const hiddenTotal = document.getElementById("hiddenTotal");
@@ -131,8 +152,9 @@
         const modalConfirm = document.getElementById("modalConfirmPayment");
         const deliveryAddressId = document.getElementById("delivery_address_id");
 
+        // 🔥 NOW RETURNS FULL JSON INCLUDING final_weight & raw_values
         async function fetchShippingFee(addressId) {
-            if (!addressId) return 0;
+            if (!addressId) return null;
             try {
                 const response = await fetch("{{ route('calculate.shipping_fee') }}", {
                     method: "POST",
@@ -144,15 +166,15 @@
                         address_id: addressId
                     }),
                 });
-                const data = await response.json();
-                return data.shipping_fee ?? 0;
+                return await response.json(); // <-- RETURN FULL RESPONSE
             } catch (err) {
                 console.error("Error fetching shipping fee:", err);
-                return 0;
+                return null;
             }
         }
 
         async function populateModal() {
+
             modalProducts.innerHTML = '';
             cart.forEach(p => {
                 const div = document.createElement('div');
@@ -161,13 +183,21 @@
                 modalProducts.appendChild(div);
             });
 
-            const shippingFee = await fetchShippingFee(deliveryAddressId.value);
-            modalShippingFee.innerText = `₱${shippingFee.toFixed(2)}`;
-            hiddenShippingFee.value = shippingFee;
+            // 🔥 Shipping = full response now
+            const shipping = await fetchShippingFee(deliveryAddressId.value);
 
-            const grandTotal = totalAmount + shippingFee;
+            if (!shipping) return;
+
+            modalWeight.innerText = `${shipping.final_weight} KG`; // final computed weight
+            modalShippingFee.innerText = `₱${parseFloat(shipping.shipping_fee).toFixed(2)}`;
+
+            hiddenShippingFee.value = shipping.shipping_fee;
+
+            const grandTotal = totalAmount + Number(shipping.shipping_fee);
             modalGrandTotal.innerText = `₱${grandTotal.toFixed(2)}`;
             hiddenTotal.value = grandTotal;
+
+            console.log("Raw Weight Values:", shipping.raw_weights); // debug log
         }
 
         showModalBtn.addEventListener('click', () => {
@@ -184,7 +214,9 @@
         modalConfirm.addEventListener('click', () => {
             document.getElementById('checkoutForm').submit();
         });
+
     });
 </script>
+
 
 @endsection
