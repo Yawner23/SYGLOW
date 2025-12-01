@@ -187,6 +187,10 @@ Route::group(['middleware' => ['permission:distributor']], function () {
     Route::get('/distributor_cart', [CartController::class, 'viewCart'])->name('distributor_cart');
     Route::get('/distributor_applied_distributor', [PageController::class, 'distributor_applied_distributor']);
     Route::get('/distributor_list', [PageController::class, 'getUplinesAndDownlines'])->name('distributors.uplines-downlines');
+
+    // --- HitPay Routes ---
+    Route::post('/hitpay/pay', [PaymentController::class, 'hitpay'])->name('hitpay.pay');
+    Route::get('/hitpay/verify', [PaymentController::class, 'verifyHitpay'])->name('hitpay.verifycheckout');
 });
 
 

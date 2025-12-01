@@ -13,9 +13,13 @@
                             <thead class="bg-gray-50">
                                 <tr>
                                     <th scope="col" class="py-3.5 px-4 text-sm font-normal text-left rtl:text-right text-gray-500">ID</th>
+                                    <th scope="col" class="py-3.5 px-4 text-sm font-normal text-left rtl:text-right text-gray-500">WayBill Number</th>
                                     <th scope="col" class="py-3.5 px-4 text-sm font-normal text-left rtl:text-right text-gray-500">Customer</th>
                                     <th scope="col" class="px-4 py-3.5 text-sm font-normal text-left rtl:text-right text-gray-500">Delivery Address</th>
                                     <th scope="col" class="px-4 py-3.5 text-sm font-normal text-left rtl:text-right text-gray-500">Total</th>
+                                    <th scope="col" class="py-3.5 px-4 text-sm font-normal text-left rtl:text-right text-gray-500">
+                                        Role
+                                    </th>
                                     <th scope="col" class="px-4 py-3.5 text-sm font-normal text-left rtl:text-right text-gray-500">Status</th>
                                     <th scope="col" class="relative py-3.5 px-4">
                                         <span class="sr-only">Actions</span>
@@ -32,6 +36,7 @@
         </div>
     </section>
 
+    <!-- <a href="{{ url('payments/${row.id}/shipping') }}"><i class='text-xl text-black bx bxs-plus-circle'>Shipping Fee</i></a> -->
     <script src="https://code.jquery.com/jquery-3.7.1.min.js"></script>
     <script src="https://cdn.datatables.net/1.13.6/js/jquery.dataTables.min.js"></script>
 
@@ -46,6 +51,10 @@
                         name: 'id'
                     },
                     {
+                        data: 'waybill_number',
+                        name: 'waybill_number'
+                    },
+                    {
                         data: 'customer.name',
                         name: 'customer.name'
                     },
@@ -56,6 +65,10 @@
                     {
                         data: 'total',
                         name: 'total'
+                    },
+                    {
+                        data: 'role',
+                        name: 'role'
                     },
                     {
                         data: 'status',
@@ -70,7 +83,6 @@
                             return `
                             <div class="flex items-center space-x-2"> 
                                 <a href="{{ url('payments/${row.id}') }}"><i class='text-xl text-black bx bx-expand-alt'>View</i></a>
-                                <a href="{{ url('payments/${row.id}/shipping') }}"><i class='text-xl text-black bx bxs-plus-circle'>Shipping Fee</i></a>
                                 <a href="#" class=" delete-payment" data-id="${row.id}"><i class='text-4xl text-red-600 bx bx-trash'></i></a>
                             </div>
                            

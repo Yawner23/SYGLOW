@@ -111,12 +111,33 @@ class PaymentController extends Controller
     public function index()
     {
         if (request()->ajax()) {
-            $payments = Payment::with(['customer', 'deliveryAddress'])
-                ->orderBy('created_at', 'desc') // Latest payments first
+            $payments = Payment::with(['customer.roles', 'deliveryAddress']) // 👈 load user + roles
+                ->orderBy('created_at', 'desc')
                 ->select('*');
+
 
             return DataTables::of($payments)
                 ->addIndexColumn()
+                ->addColumn('role', function ($payment) {
+                    // customer = User model (because of Payment::customer())
+                    $user = $payment->customer;
+
+                    if (!$user) {
+                        return 'No User';
+                    }
+
+                    // roles() is defined on User model
+                    if ($user->roles->isEmpty()) {
+                        return 'No Role';
+                    }
+
+                    // If user can have multiple roles (e.g. "Customer, Distributor")
+                    return $user->roles->pluck('name')->join(', ');
+                })
+
+                ->addColumn('waybill_number', function ($payment) {
+                    return $payment->tracking_number ?? 'Unknown';
+                })
                 ->addColumn('status', function ($payment) {
                     $statusText = ucfirst(str_replace('_', ' ', $payment->status));
                     $checked = $payment->status === 'Paid' ? 'checked' : '';
@@ -299,13 +320,7 @@ class PaymentController extends Controller
     | REDIRECT TO HITPAY
     |--------------------------------------------------------------------------
     */
-        return $this->processHitpayPayment(
-            $payment,
-            $request->product_id,
-            $request->subtotal,
-            $discount,
-            $shippingFee
-        );
+        return $this->hitpay($payment);
     }
 
     // ------------------DISTRIBUTOR SIDE---------------------------
@@ -1006,6 +1021,11 @@ class PaymentController extends Controller
             'status' => ($paymentMethod === 'cod') ? 'cod_pending' : 'pending',
         ]);
 
+        // 🔥 FIX — reload the payment with updated values
+        $payment->refresh();
+
+        Log::info('Updated Payment', ['payment' => $payment->toArray()]);
+
         // Increment voucher usage if used
         if ($voucherCode) {
             Voucher::where('code', $voucherCode)->increment('used_count');
@@ -1029,8 +1049,6 @@ class PaymentController extends Controller
         // Online (HitPay) → redirect to HitPay
         return $this->processHitpayPayment($payment, $productIds, $subtotals, $discount, $shippingfeedummy);
     }
-
-
 
     public function OrderQuery($id)
     {
@@ -1521,72 +1539,63 @@ class PaymentController extends Controller
         return view('place_order');
     }
 
-    private function processHitpayPayment(
-        Payment $payment,
-        array $productIds,
-        array $subtotals,
-        $discount,
-        $shippingFee
-    ) {
-        // 🧮 Calculate product total
-        $productTotal = array_sum($subtotals);
+    public function hitpay(Payment $payment)
+    {
+        // Always reload from DB with relations, so we see the Shipping row
+        $payment = Payment::with(['products', 'shipping'])->findOrFail($payment->id);
 
-        // 🧮 Compute grand total (product total + shipping - discount)
+        // 🔹 Product total from payment_products
+        $productTotal = $payment->products->sum(fn($p) => $p->subtotal ?? 0);
+
+        $shippingFee = 0;
+        // $shippingFee = optional($payment->shipping)->shipping_fee ?? 0;
+
+        // 🔹 Discount from payments table
+        $discount = $payment->discount ?? 0;
+
+        // 🔹 Grand total sent to HitPay
         $grandTotal = max(0, $productTotal + $shippingFee - $discount);
 
-        // 🔹 Update payment totals
+        // 🔹 Save consistent totals in DB
         $payment->update([
-            'total' => $grandTotal,
-            'shipping_fee' => $shippingFee,
-            'discount' => $discount,
+            'total'         => $grandTotal,
             'product_total' => $productTotal,
         ]);
 
-        // 🔹 Build HitPay line items
-        $lineItems = [];
-
-        // Product total as a single line item
-        $lineItems[] = [
-            'name' => 'Products Total',
-            'amount' => (float) $productTotal,
+        // 🔹 HitPay line items
+        $lineItems = [
+            ['name' => 'Products Total', 'amount' => (float) $productTotal],
         ];
 
-        // Shipping fee
         if ($shippingFee > 0) {
-            $lineItems[] = [
-                'name' => 'Shipping Fee',
-                'amount' => (float) $shippingFee,
-            ];
+            $lineItems[] = ['name' => 'Shipping Fee', 'amount' => (float) $shippingFee];
         }
 
-        // Discount (if any)
         if ($discount > 0) {
-            $lineItems[] = [
-                'name' => 'Discount',
-                'amount' => (float) (-$discount),
-            ];
+            $lineItems[] = ['name' => 'Discount', 'amount' => (float) -$discount];
         }
 
-        // ✅ Format total with 2 decimals for HitPay
+        // HitPay expects a string/decimal like "61.00"
         $amount = number_format($grandTotal, 2, '.', '');
 
-        // 🔹 URLs
-        $redirectUrl = route('hitpay.verify');
+        $redirectUrl = route('hitpay.verifycheckout');   // keep your route
         $webhookUrl = env('HITPAY_MODE') === 'sandbox'
             ? env('HITPAY_SANDBOX_WEBHOOK_URL')
             : env('HITPAY_LIVE_WEBHOOK_URL');
 
-        try {
-            // Log payload before sending
-            Log::info('HitPay Payload', [
-                'reference_number' => $payment->id,
-                'amount' => $amount,
-                'line_items' => $lineItems,
-            ]);
+        Log::info('HitPay Payload', [
+            'payment_id'   => $payment->id,
+            'amount'       => $amount,
+            'productTotal' => $productTotal,
+            'shippingFee'  => $shippingFee,
+            'discount'     => $discount,
+            'line_items'   => $lineItems,
+        ]);
 
+        try {
             $response = Http::withHeaders([
                 'X-BUSINESS-API-KEY' => env('HITPAY_API_KEY'),
-                'accept' => 'application/json',
+                'accept'             => 'application/json',
             ])->post(env('HITPAY_URL') . '/payment-requests', [
                 'amount'           => $amount,
                 'currency'         => 'PHP',
@@ -1606,6 +1615,186 @@ class PaymentController extends Controller
                 return redirect()->away($responseData['url']);
             }
 
+            return back()->withErrors(['error' => $responseData['message'] ?? 'HitPay Error']);
+        } catch (\Exception $e) {
+            return back()->withErrors(['error' => 'HitPay Error: ' . $e->getMessage()]);
+        }
+    }
+
+
+
+    public function verifyHitpay(Request $request)
+    {
+        $paymentId = Session::get('payment_id');
+        Log::info("🔍 Verifying HitPay", ['payment_id' => $paymentId]);
+
+        $payment = Payment::with(['products.product', 'shipping'])->findOrFail($paymentId);
+
+        $response = Http::withHeaders([
+            'X-BUSINESS-API-KEY' => env('HITPAY_API_KEY'),
+            'accept'             => 'application/json',
+        ])->get(env('HITPAY_URL') . '/payment-requests/' . $payment->transaction_id);
+
+        Log::info("🔍 HitPay Response", ['body' => $response->body()]);
+
+        $responseData = $response->json();
+
+        if (!$response->successful() || ($responseData['status'] ?? null) !== 'completed') {
+            PaymentProduct::where('payment_id', $payment->id)->delete();
+            $payment->delete();
+
+            Session::forget('payment_id');
+            Session::forget('cart');
+
+            return redirect('place_order')
+                ->withErrors(['error' => 'HitPay payment failed. Order removed.']);
+        }
+
+        // 🔹 Recalculate from DB (same formula as in hitpay)
+        $productTotal = $payment->products->sum(fn($p) => $p->subtotal ?? 0);
+        $shippingFee  = optional($payment->shipping)->shipping_fee ?? 0;
+        $discount     = $payment->discount ?? 0;
+
+        $finalTotal = max(0, $productTotal + $shippingFee - $discount);
+
+        $payment->update([
+            'status'         => 'Paid',
+            'payment_method' => $responseData['payment_method'] ?? 'HitPay',
+            'total'          => $finalTotal,
+        ]);
+
+        Log::info("💰 Payment Updated", [
+            'payment_id'    => $payment->id,
+            'product_total' => $productTotal,
+            'shipping_fee'  => $shippingFee,
+            'discount'      => $discount,
+            'total'         => $finalTotal,
+        ]);
+
+        // Deduct stock
+        foreach ($payment->products as $p) {
+            if ($p->product) {
+                $p->product->decrement('quantity', $p->quantity);
+            }
+        }
+
+        Session::forget('cart');
+
+        // Send to J&T (receiver is handled inside sendToJnt)
+        $this->sendToJnt($payment);
+
+        // Prepare success view
+        $payment_products = PaymentProduct::where('payment_id', $payment->id)->get();
+
+        Log::info('🧾 Payment products loaded for success view', [
+            'payment_id'    => $payment->id,
+            'product_count' => $payment_products->count(),
+            'products'      => $payment_products->map(fn($p) => [
+                'product_id' => $p->product_id,
+                'quantity'   => $p->quantity,
+                'subtotal'   => $p->subtotal,
+            ]),
+        ]);
+
+        $delivery_address = DeliveryAddress::where('id', $payment->delivery_address_id)
+            ->pluck('deliver_name')
+            ->first();
+
+        Log::info('📦 Delivery address loaded for success view', [
+            'payment_id'           => $payment->id,
+            'delivery_address_id'  => $payment->delivery_address_id,
+            'delivery_name_found'  => $delivery_address,
+        ]);
+
+
+        return view('success_purchase', [
+            'transaction_id'    => $payment->transaction_id,
+            'payment_id'        => $payment->id,
+            'subtotals'         => $payment_products->pluck('subtotal'),
+            'amountPaid'        => $finalTotal,
+            'delivery_address'  => $delivery_address,
+            'payment_method'    => $payment->payment_method,
+            'clearLocalStorage' => true,
+        ]);
+    }
+
+
+
+
+    private function processHitpayPayment(
+        Payment $payment,
+        array $productIds,
+        array $subtotals,
+        $discount,
+        $shippingFee,
+        $valuationFee = 0,
+        $codFee = 0,
+        $vatFee = 0
+    ) {
+        // 🧮 Calculate product total
+        $productTotal = array_sum($subtotals);
+
+        // 🧮 Compute grand total (product total + shipping + fees - discount)
+        $grandTotal = max(0, $productTotal + $shippingFee + $valuationFee + $codFee + $vatFee - $discount);
+
+        // 🔹 Update payment totals in DB
+        $payment->update([
+            'total' => $grandTotal,
+            'shipping_fee' => $shippingFee,
+            'discount' => $discount,
+            'product_total' => $productTotal,
+            'valuation_fee' => $valuationFee,
+            'cod_fee' => $codFee,
+            'vat_fee' => $vatFee,
+        ]);
+
+        // 🔹 Build HitPay line items
+        $lineItems = [
+            ['name' => 'Products Total', 'amount' => (float) $productTotal],
+        ];
+
+        if ($shippingFee > 0) $lineItems[] = ['name' => 'Shipping Fee', 'amount' => (float) $shippingFee];
+        if ($valuationFee > 0) $lineItems[] = ['name' => 'Valuation Fee', 'amount' => (float) $valuationFee];
+        if ($codFee > 0) $lineItems[] = ['name' => 'COD Fee', 'amount' => (float) $codFee];
+        if ($vatFee > 0) $lineItems[] = ['name' => 'VAT Fee', 'amount' => (float) $vatFee];
+        if ($discount > 0) $lineItems[] = ['name' => 'Discount', 'amount' => (float) -$discount];
+
+        // 🔹 Total amount for HitPay
+        $amount = round($grandTotal, 2);
+
+        $redirectUrl = route('hitpay.verify');
+        $webhookUrl = env('HITPAY_MODE') === 'sandbox'
+            ? env('HITPAY_SANDBOX_WEBHOOK_URL')
+            : env('HITPAY_LIVE_WEBHOOK_URL');
+
+        try {
+            Log::info('HitPay Payload', [
+                'reference_number' => $payment->id,
+                'amount' => $amount,
+                'line_items' => $lineItems,
+            ]);
+
+            $response = Http::withHeaders([
+                'X-BUSINESS-API-KEY' => env('HITPAY_API_KEY'),
+                'accept' => 'application/json',
+            ])->post(env('HITPAY_URL') . '/payment-requests', [
+                'amount' => $amount,
+                'currency' => 'PHP',
+                'reference_number' => (string) $payment->id,
+                'redirect_url' => $redirectUrl,
+                'webhook' => $webhookUrl,
+                'purpose' => 'Order Payment #' . $payment->id,
+                'items' => $lineItems,
+            ]);
+
+            $responseData = $response->json();
+
+            if ($response->successful() && isset($responseData['id'], $responseData['url'])) {
+                $payment->update(['transaction_id' => $responseData['id']]);
+                Session::put('payment_id', $payment->id);
+                return redirect()->away($responseData['url']);
+            }
+
             $errorMessage = $responseData['message'] ?? 'HitPay processing failed.';
             return redirect()->back()->withErrors(['error' => $errorMessage]);
         } catch (\Exception $e) {
@@ -1613,16 +1802,12 @@ class PaymentController extends Controller
         }
     }
 
-
-
-
-
     public function verifyHitpayPayment(Request $request)
     {
         $paymentId = Session::get('payment_id');
         Log::info("🔹 Verifying HitPay payment", ['payment_id' => $paymentId]);
 
-        $payment = Payment::with('products.product')->findOrFail($paymentId);
+        $payment = Payment::with('products.product', 'shipping')->findOrFail($paymentId);
         Log::info("🔹 Payment fetched", ['payment_id' => $payment->id, 'transaction_id' => $payment->transaction_id]);
 
         $response = Http::withHeaders([
@@ -1637,22 +1822,17 @@ class PaymentController extends Controller
         if ($response->successful() && $responseData['status'] === 'completed') {
             Log::info("✅ HitPay payment completed", ['payment_method' => $responseData['payment_method'] ?? 'HitPay']);
 
-            // 🔹 Update payment: only product total + shipping fee
-            $productTotal = $payment->products->sum(fn($p) => $p->subtotal ?? 0);
-            $shippingFee = $payment->shipping->shipping_fee ?? 0;
-            $discount = $payment->discount ?? 0;
-
-            $hitpayTotal = $productTotal + $shippingFee - $discount;
-
+            // 🔹 Use stored total in DB, which includes discount + fees
             $payment->update([
                 'status' => 'Paid',
                 'payment_method' => $responseData['payment_method'] ?? 'HitPay',
-                'total' => $hitpayTotal,
+                'total' => $payment->total, // already correct
             ]);
 
-            Log::info("🔹 Payment status updated to Paid (HitPay amount only)", [
+            Log::info("🔹 Payment status updated to Paid", [
                 'payment_id' => $payment->id,
-                'total' => $payment->total
+                'total' => $payment->total,
+                'discount' => $payment->discount
             ]);
 
             // 🔹 Deduct stock
@@ -1672,7 +1852,7 @@ class PaymentController extends Controller
             Session::forget('cart');
             Log::info("🔹 Cart cleared from session");
 
-            // 🔹 Send order to J&T (full fees will still be included)
+            // 🔹 Send order to J&T
             try {
                 $this->sendToJnt($payment);
                 Log::info("✅ Sent order to J&T", ['payment_id' => $payment->id]);
@@ -1680,18 +1860,11 @@ class PaymentController extends Controller
                 Log::error("❌ Failed to send J&T order", ['payment_id' => $payment->id, 'error' => $e->getMessage()]);
             }
 
-            // 🔹 Prepare success_purchase view
             $payment_products = PaymentProduct::where('payment_id', $paymentId)->get();
             $subtotals = $payment_products->pluck('subtotal');
             $delivery_address = DeliveryAddress::where('id', $payment->delivery_address_id)
                 ->pluck('deliver_name')
                 ->first();
-
-            Log::info("🔹 Preparing success_purchase view", [
-                'payment_id' => $payment->id,
-                'amount_paid' => $payment->total,
-                'delivery_address' => $delivery_address
-            ]);
 
             return view('success_purchase', [
                 'transaction_id'    => $payment->transaction_id,
@@ -1702,34 +1875,59 @@ class PaymentController extends Controller
                 'payment_method'    => $payment->payment_method,
                 'clearLocalStorage' => true,
             ]);
-        } else {
-            Log::warning("❌ HitPay payment not successful - deleting order", [
-                'payment_id' => $payment->id,
-                'response_status' => $response->status(),
-                'response_body' => $response->body()
-            ]);
-
-            // ❗ DELETE PAYMENT + PAYMENT PRODUCTS
-            PaymentProduct::where('payment_id', $payment->id)->delete();
-            $payment->delete();
-
-            Session::forget('payment_id');
-            Session::forget('cart');
-
-            return redirect('place_order')->withErrors([
-                'error' => 'HitPay Payment was not successful. Order has been removed.'
-            ]);
         }
+
+        // ❌ Payment not successful
+        Log::warning("❌ HitPay payment not successful - deleting order", [
+            'payment_id' => $payment->id,
+            'response_status' => $response->status(),
+            'response_body' => $response->body()
+        ]);
+
+        PaymentProduct::where('payment_id', $payment->id)->delete();
+        $payment->delete();
+
+        Session::forget('payment_id');
+        Session::forget('cart');
+
+        return redirect('place_order')->withErrors([
+            'error' => 'HitPay Payment was not successful. Order has been removed.'
+        ]);
     }
-
-
 
 
     private function sendToJnt($payment)
     {
         try {
-            // 🔹 Fetch customer and related products
+            // 🔹 Try to fetch customer via your existing helper
             $customer = $payment->customers($payment->id, $payment->delivery_address_id)->first();
+
+            // 🔹 Fallback: if customers() returns null, use DeliveryAddress instead
+            if (!$customer) {
+                $address = DeliveryAddress::find($payment->delivery_address_id);
+
+                if (!$address) {
+                    Log::error('Receiver details not found for payment.', [
+                        'payment_id'          => $payment->id,
+                        'delivery_address_id' => $payment->delivery_address_id,
+                    ]);
+
+                    return null; // don't call J&T with empty receiver
+                }
+
+                // Build a "customer-like" array compatible with getReceiverDetails()
+                $customer = [
+                    'first_name'      => $address->deliver_name ?? '',
+                    'last_name'       => '', // or split deliver_name if you want
+                    'contact_number'  => $address->contact_no ?? '',
+                    'province'        => $address->province ?? '',
+                    'city'            => $address->city ?? '',
+                    'barangay'        => $address->barangay ?? '',
+                    'full_address'    => $address->full_address ?? '',
+                ];
+            }
+
+            // 🔹 Fetch related products
             $products = $payment->createorder($payment->id);
 
             // 🔹 Compute total weight using SQL join
@@ -1748,8 +1946,8 @@ class PaymentController extends Controller
 
             $totalWeight = ceil($totalWeight * 2) / 2; // round up to nearest 0.5 kg
 
-            // 🔹 Compute shipping fee
-            $region = strtoupper($customer->province ?? 'MINDANAO');
+            // 🔹 Compute shipping fee (use customer province from array/model)
+            $region = strtoupper(($customer['province'] ?? $customer->province ?? 'MINDANAO'));
             $shippingFee = $this->computeShippingFee($region, $totalWeight);
 
             // 🔹 Compute total quantity
@@ -1760,11 +1958,10 @@ class PaymentController extends Controller
 
             // 🔹 Compute additional fees
             $valuationFee = round($productTotal * 0.01, 2); // 1% valuation
-            $codFee = round(($productTotal + $shippingFee + $valuationFee) * 0.0275, 2); // 2.75% COD
-            $vatFee = round($codFee * 0.12, 2); // 12% VAT
-            $discount = $payment->discount ?? 0;
+            $codFee       = round(($productTotal + $shippingFee + $valuationFee) * 0.0275, 2); // 2.75% COD
+            $vatFee       = round($codFee * 0.12, 2); // 12% VAT
+            $discount     = $payment->discount ?? 0;
 
-            // 🔹 Compute items value including all fees
             // 🔹 Compute items value based on payment method
             if (strtolower($payment->payment_method) === 'hitpay') {
                 $itemsValue = $productTotal + $shippingFee - $discount;
@@ -1774,31 +1971,31 @@ class PaymentController extends Controller
 
             // 🔹 Prepare payload for J&T
             $data = [
-                "actiontype" => "add",
-                "environment" => "production",
-                "eccompanyid" => "RWEB SOLUTIONS",
-                "customerid" => "CS-V0286",
-                "txlogisticid" => "98 " . $payment->id,
-                "ordertype" => "1",
-                "servicetype" => "6",
-                "deliverytype" => "1",
-                "sender" => $this->getSenderDetails(),
-                "receiver" => $this->getReceiverDetails($customer),
+                "actiontype"      => "add",
+                "environment"     => "production",
+                "eccompanyid"     => "RWEB SOLUTIONS",
+                "customerid"      => "CS-V0286",
+                "txlogisticid"    => "98 " . $payment->id,
+                "ordertype"       => "1",
+                "servicetype"     => "6",
+                "deliverytype"    => "1",
+                "sender"          => $this->getSenderDetails(),
+                "receiver"        => $this->getReceiverDetails($customer),
                 "createordertime" => now()->toDateTimeString(),
-                "paytype" => "1", // COD
-                "weight" => round($totalWeight, 2),
-                "itemsvalue" => round($itemsValue, 2),
-                "totalquantity" => $totalQuantity,
-                "items" => $this->formatOrderItems($products),
-                "shippingfee" => round($shippingFee, 2),
-                "valuation_fee" => round($valuationFee, 2),
-                "cod_fee" => round($codFee, 2),
-                "vat_fee" => round($vatFee, 2),
+                "paytype"         => "1", // COD
+                "weight"          => round($totalWeight, 2),
+                "itemsvalue"      => round($payment->total, 2),           // 🔹 use computed itemsValue
+                "totalquantity"   => $totalQuantity,
+                "items"           => $this->formatOrderItems($products),
+                "shippingfee"     => round($shippingFee, 2),
+                "valuation_fee"   => round($valuationFee, 2),
+                "cod_fee"         => round($codFee, 2),
+                "vat_fee"         => round($vatFee, 2),
             ];
 
             Log::info('J&T Order Payload', [
                 'payment_id' => $payment->id,
-                'data' => $data,
+                'data'       => $data,
             ]);
 
             // 🔹 Generate data digest
@@ -1807,14 +2004,14 @@ class PaymentController extends Controller
             // 🔹 Prepare POST data
             $postData = [
                 'logistics_interface' => json_encode($data),
-                'data_digest' => $data_digest,
-                'msg_type' => 'ORDERCREATE',
-                'eccompanyid' => 'RWEB SOLUTIONS',
+                'data_digest'         => $data_digest,
+                'msg_type'            => 'ORDERCREATE',
+                'eccompanyid'         => 'RWEB SOLUTIONS',
             ];
 
             Log::info('J&T POST Data', [
                 'payment_id' => $payment->id,
-                'postData' => $postData,
+                'postData'   => $postData,
             ]);
 
             // 🔹 Send POST request
@@ -1825,9 +2022,9 @@ class PaymentController extends Controller
 
             Log::info('J&T API Response', [
                 'payment_id' => $payment->id,
-                'status' => $response->status(),
-                'body' => $response->body(),
-                'json' => $response->json(),
+                'status'     => $response->status(),
+                'body'       => $response->body(),
+                'json'       => $response->json(),
             ]);
 
             // 🔹 SAVE MAILNO RETURNED BY J&T
