@@ -60,7 +60,7 @@
                     },
                     {
                         data: 'delivery_address.full_address',
-                        name: 'delivery_address.full_address'
+                        name: 'deliveryAddress.full_address'
                     },
                     {
                         data: 'total',

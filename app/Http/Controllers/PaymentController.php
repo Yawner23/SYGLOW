@@ -1807,32 +1807,77 @@ class PaymentController extends Controller
         $paymentId = Session::get('payment_id');
         Log::info("🔹 Verifying HitPay payment", ['payment_id' => $paymentId]);
 
-        $payment = Payment::with('products.product', 'shipping')->findOrFail($paymentId);
-        Log::info("🔹 Payment fetched", ['payment_id' => $payment->id, 'transaction_id' => $payment->transaction_id]);
+        // Load products + shipping row
+        $payment = Payment::with(['products.product', 'shipping'])->findOrFail($paymentId);
+        Log::info("🔹 Payment fetched", [
+            'payment_id'      => $payment->id,
+            'transaction_id'  => $payment->transaction_id,
+        ]);
 
         $response = Http::withHeaders([
             'X-BUSINESS-API-KEY' => env('HITPAY_API_KEY'),
-            'accept' => 'application/json',
+            'accept'             => 'application/json',
         ])->get(env('HITPAY_URL') . '/payment-requests/' . $payment->transaction_id);
 
-        Log::info("🔹 HitPay API Response", ['status' => $response->status(), 'body' => $response->body()]);
+        Log::info("🔹 HitPay API Response", [
+            'status' => $response->status(),
+            'body'   => $response->body()
+        ]);
 
         $responseData = $response->json();
 
-        if ($response->successful() && $responseData['status'] === 'completed') {
-            Log::info("✅ HitPay payment completed", ['payment_method' => $responseData['payment_method'] ?? 'HitPay']);
+        if ($response->successful() && ($responseData['status'] ?? null) === 'completed') {
+            Log::info("✅ HitPay payment completed", [
+                'payment_method' => $responseData['payment_method'] ?? 'HitPay'
+            ]);
 
-            // 🔹 Use stored total in DB, which includes discount + fees
+            // 🔹 Recompute totals from DB so shipping is included
+
+            // product total from payment_products
+            $productTotal = $payment->products->sum(fn($p) => $p->subtotal ?? 0);
+
+            // shipping fee from Shipping table
+            $shippingFee = optional($payment->shipping)->shipping_fee ?? 0;
+
+            // other fees & discount stored on payments table (if you set them in processHitpayPayment)
+            $valuationFee = $payment->valuation_fee ?? 0;
+            $codFee       = $payment->cod_fee ?? 0;
+            $vatFee       = $payment->vat_fee ?? 0;
+            $discount     = $payment->discount ?? 0;
+
+            // final total = products + shipping + fees - discount
+            $finalTotal = max(
+                0,
+                $productTotal + $shippingFee + $valuationFee + $codFee + $vatFee - $discount
+            );
+
+            Log::info("🔹 Recomputed payment totals", [
+                'payment_id'    => $payment->id,
+                'product_total' => $productTotal,
+                'shipping_fee'  => $shippingFee,
+                'valuation_fee' => $valuationFee,
+                'cod_fee'       => $codFee,
+                'vat_fee'       => $vatFee,
+                'discount'      => $discount,
+                'final_total'   => $finalTotal,
+            ]);
+
+            // 🔹 Update payment with consistent values
             $payment->update([
-                'status' => 'Paid',
+                'status'         => 'Paid',
                 'payment_method' => $responseData['payment_method'] ?? 'HitPay',
-                'total' => $payment->total, // already correct
+                'total'          => $finalTotal,
+                'product_total'  => $productTotal,
+                'shipping_fee'   => $shippingFee,
+                'valuation_fee'  => $valuationFee,
+                'cod_fee'        => $codFee,
+                'vat_fee'        => $vatFee,
+                'discount'       => $discount,
             ]);
 
             Log::info("🔹 Payment status updated to Paid", [
                 'payment_id' => $payment->id,
-                'total' => $payment->total,
-                'discount' => $payment->discount
+                'total'      => $finalTotal,
             ]);
 
             // 🔹 Deduct stock
@@ -1841,10 +1886,10 @@ class PaymentController extends Controller
                     $oldQuantity = $p->product->quantity;
                     $p->product->decrement('quantity', $p->quantity);
                     Log::info("🔹 Product stock decremented", [
-                        'product_id' => $p->product->id,
-                        'old_quantity' => $oldQuantity,
+                        'product_id'        => $p->product->id,
+                        'old_quantity'      => $oldQuantity,
                         'quantity_deducted' => $p->quantity,
-                        'new_quantity' => $p->product->fresh()->quantity
+                        'new_quantity'      => $p->product->fresh()->quantity,
                     ]);
                 }
             }
@@ -1852,12 +1897,15 @@ class PaymentController extends Controller
             Session::forget('cart');
             Log::info("🔹 Cart cleared from session");
 
-            // 🔹 Send order to J&T
+            // 🔹 Send order to J&T (it will now see the right total + shipping)
             try {
                 $this->sendToJnt($payment);
                 Log::info("✅ Sent order to J&T", ['payment_id' => $payment->id]);
             } catch (\Exception $e) {
-                Log::error("❌ Failed to send J&T order", ['payment_id' => $payment->id, 'error' => $e->getMessage()]);
+                Log::error("❌ Failed to send J&T order", [
+                    'payment_id' => $payment->id,
+                    'error'      => $e->getMessage()
+                ]);
             }
 
             $payment_products = PaymentProduct::where('payment_id', $paymentId)->get();
@@ -1870,7 +1918,7 @@ class PaymentController extends Controller
                 'transaction_id'    => $payment->transaction_id,
                 'payment_id'        => $payment->id,
                 'subtotals'         => $subtotals,
-                'amountPaid'        => $payment->total,
+                'amountPaid'        => $finalTotal,
                 'delivery_address'  => $delivery_address,
                 'payment_method'    => $payment->payment_method,
                 'clearLocalStorage' => true,
@@ -1879,9 +1927,9 @@ class PaymentController extends Controller
 
         // ❌ Payment not successful
         Log::warning("❌ HitPay payment not successful - deleting order", [
-            'payment_id' => $payment->id,
+            'payment_id'      => $payment->id,
             'response_status' => $response->status(),
-            'response_body' => $response->body()
+            'response_body'   => $response->body()
         ]);
 
         PaymentProduct::where('payment_id', $payment->id)->delete();
@@ -1894,6 +1942,7 @@ class PaymentController extends Controller
             'error' => 'HitPay Payment was not successful. Order has been removed.'
         ]);
     }
+
 
 
     private function sendToJnt($payment)

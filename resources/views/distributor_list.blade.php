@@ -62,7 +62,8 @@
                 <img class="absolute z-0 object-cover w-full h-full" src="{{ asset('images/Distributor-Card.png') }}" alt="Distributor Card">
                 <div class="relative flex flex-col items-center justify-center py-12">
                     <img class="rounded-full h-[6rem] object-cover w-[6rem]" src="{{ asset('uploads/profile_pictures/' . ($upline->profile_picture ?? 'default-avatar.jpg')) }}" alt="Distributor Picture">
-                    <p>{{ $upline->id }}</p>
+                    <p>{{ $upline->user_id }}</p>
+                    <p>{{ $upline->distributor_type }}</p>
                     <p class="text-[#f56e98] text-2xl">{{ $upline->name }}</p>
                     <div class="flex items-center justify-center py-4 space-x-2">
                         <div><img src="{{ asset('images/icon-facebook.png') }}" alt="Facebook"></div>
@@ -106,7 +107,29 @@
                 <img class="absolute z-0 object-cover w-full h-full" src="{{ asset('images/Distributor-Card.png') }}" alt="Distributor Card">
                 <div class="relative flex flex-col items-center justify-center py-12">
                     <img class="rounded-full h-[6rem] object-cover w-[6rem]" src="{{ asset('uploads/profile_pictures/' . ($downline->profile_picture ?? 'default-avatar.jpg')) }}" alt="Distributor Picture">
-                    <p>{{ $downline->id }}</p>
+                    <p>{{ $downline->user_id }}</p>
+                    <p>
+                        @if(Auth::user()->distributor)
+                        @switch(Auth::user()->distributor->distributor_type)
+                        @case(1)
+                        Regional Distributor
+                        @break
+                        @case(2)
+                        Provincial Distributor
+                        @break
+                        @case(3)
+                        City Distributor
+                        @break
+                        @case(4)
+                        Reseller Distributor
+                        @break
+                        @default
+                        N/A
+                        @endswitch
+                        @else
+                        N/A
+                        @endif
+                    </p>
                     <p class="text-[#f56e98] text-2xl">{{ $downline->name }}</p>
                     <div class="flex items-center justify-center py-4 space-x-2">
                         <div><img src="{{ asset('images/icon-facebook.png') }}" alt="Facebook"></div>

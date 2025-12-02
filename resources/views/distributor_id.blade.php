@@ -24,6 +24,28 @@
             <div class="relative z-50 flex flex-col items-center justify-center py-12">
                 <img class="rounded-full h-[6rem] object-cover w-[6rem]" src="{{ asset('uploads/profile_pictures/' . (Auth::user()->distributor->profile_picture ?? 'default-avatar.jpg')) }}" alt="">
                 <p> {{ Auth::user()->id }}</p>
+                <p>
+                    @if(Auth::user()->distributor)
+                    @switch(Auth::user()->distributor->distributor_type)
+                    @case(1)
+                    Regional Distributor
+                    @break
+                    @case(2)
+                    Provincial Distributor
+                    @break
+                    @case(3)
+                    City Distributor
+                    @break
+                    @case(4)
+                    Reseller Distributor
+                    @break
+                    @default
+                    N/A
+                    @endswitch
+                    @else
+                    N/A
+                    @endif
+                </p>
                 <p class="text-[#f56e98] text-2xl"> {{ optional(Auth::user()->distributor)->name ?? Auth::user()->name }}</p>
 
                 <div class="flex items-center justify-center py-4 space-x-2">

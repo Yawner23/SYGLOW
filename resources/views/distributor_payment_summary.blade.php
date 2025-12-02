@@ -23,6 +23,8 @@
             <h1 class="text-2xl font-bold text-center">Payment Summary</h1>
             <div class="hidden border-b border-black border-dashed lg:block"></div>
             <ul class="grid grid-cols-2">
+                <h1>Waybill Number: </h1>
+                <li>{{ $payment->tracking_number}}</li>
                 <li>Order Number:</li>
                 <li>#{{$payment->id}}</li>
                 @foreach ($payment->products as $product)
