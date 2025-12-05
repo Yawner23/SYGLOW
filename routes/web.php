@@ -124,6 +124,8 @@ Route::group(['middleware' => ['permission:blogs']], function () {
 Route::group(['middleware' => ['permission:payments']], function () {
     Route::resource('admin/payments', PaymentController::class);
     Route::post('admin/payments/update_status', [PaymentController::class, 'updateStatus'])->name('payments.updateStatus');
+    Route::get('/payments/print-all-pdf', [PaymentController::class, 'printAllPdf'])
+        ->name('payments.printAll');
     Route::delete('/payments/{payment}', [PaymentController::class, 'destroy'])->name('payments.destroy');
     Route::get('/payments/{payment}', [PaymentController::class, 'show'])->name('payments.show');
     Route::get('/payments/{payment}/shipping', [ShippingController::class, 'create'])->name('shipping.create');

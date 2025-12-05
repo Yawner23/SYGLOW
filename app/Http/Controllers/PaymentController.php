@@ -13,11 +13,13 @@ use App\Models\PaymentProduct;
 use App\Models\DeliveryAddress;
 use Yajra\DataTables\DataTables;
 use App\Http\Controllers\Controller;
+use Barryvdh\DomPDF\Facade\Pdf;
 use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Session;
+use Illuminate\Support\Str;
 
 class PaymentController extends Controller
 {
@@ -94,8 +96,16 @@ class PaymentController extends Controller
     public function show($id)
     {
         $payment = Payment::with(['customer', 'deliveryAddress', 'products', 'shipping'])->findOrFail($id);
-        return view('admin.payments.show', compact('payment'));
+
+        // Decode J&T Body Response
+        $jtResponse = null;
+        if ($payment->jt_response_body) { // whatever column stores the API body
+            $jtResponse = json_decode($payment->jt_response_body, true);
+        }
+
+        return view('admin.payments.show', compact('payment', 'jtResponse'));
     }
+
 
     public function updateStatus(Request $request)
     {
@@ -108,40 +118,164 @@ class PaymentController extends Controller
         return response()->json(['success' => true]);
     }
 
-    public function index()
+    public function printAllPdf()
     {
-        if (request()->ajax()) {
-            $payments = Payment::with(['customer.roles', 'deliveryAddress']) // 👈 load user + roles
+        Log::info('printAllPdf(): START');
+
+        $payments = Payment::with([
+            'customer',
+            'deliveryAddress',
+            'products.product',
+        ])->orderBy('created_at', 'desc')->get();
+
+        Log::info('printAllPdf(): Payments fetched', ['count' => $payments->count()]);
+
+        $paymentIds = $payments->pluck('id')->toArray();
+
+        try {
+            $pdf = Pdf::loadView('admin.payments.print_all', compact('payments'));
+            Log::info('printAllPdf(): View loaded');
+
+            // 100mm x 90mm in points (1mm ≈ 2.83465pt)
+            $widthPt  = 100 * 2.83465;  // 283.465
+            $heightPt = 90  * 2.83465;  // 255.1185
+
+            $pdf->setPaper([0, 0, $widthPt, $heightPt], 'portrait');
+            Log::info('printAllPdf(): setPaper 100x90mm', [
+                'width_pt'  => $widthPt,
+                'height_pt' => $heightPt,
+            ]);
+
+            // ✅ mark them as printed
+            if (!empty($paymentIds)) {
+                Payment::whereIn('id', $paymentIds)->update([
+                    'label_status' => 'printed',
+                ]);
+                Log::info('printAllPdf(): label_status set to printed', [
+                    'payment_ids' => $paymentIds,
+                ]);
+            }
+
+            return $pdf->stream('waybills.pdf');
+        } catch (\Throwable $e) {
+            Log::error('printAllPdf(): ERROR generating PDF', [
+                'message' => $e->getMessage(),
+            ]);
+
+            if (!empty($paymentIds)) {
+                Payment::whereIn('id', $paymentIds)->update([
+                    'label_status' => 'printing_failed',
+                ]);
+                Log::info('printAllPdf(): label_status set to printing_failed', [
+                    'payment_ids' => $paymentIds,
+                ]);
+            }
+
+            throw $e;
+        }
+    }
+
+
+    public function index(Request $request)
+    {
+        if ($request->ajax()) {
+
+            // 🔹 Log all incoming filter values
+            Log::info('Payment Filters Received:', [
+                'time_created'      => $request->time_created,
+                'customer_username' => $request->customer_username,
+                'product'           => $request->product,
+                'label_status'      => $request->label_status,
+                'payment_method'    => $request->payment_method,
+                'order_status'      => $request->order_status,
+            ]);
+
+            $payments = Payment::with([
+                'customer.roles',
+                'deliveryAddress',
+                'products.product',
+            ])
+
+                // 🔹 FILTER: Order created date
+                ->when($request->time_created, function ($q, $date) {
+                    Log::info("Applying filter: time_created = {$date}");
+                    $q->whereDate('created_at', $date);
+                })
+
+                ->when($request->customer_name, function ($q, $name) {
+                    Log::info("Filter: searching customer.name LIKE %{$name}%");
+
+                    $q->whereHas('customer', function ($qq) use ($name) {
+                        $qq->where('name', 'like', "%{$name}%");
+                    });
+                })
+
+                // 🔹 FILTER: Product name
+                ->when($request->product, function ($q, $product) {
+                    Log::info("Applying filter: product LIKE %{$product}%");
+                    $q->whereHas('products.product', function ($qq) use ($product) {
+                        $qq->where('product_name', 'like', "%{$product}%");
+                    });
+                })
+
+                // 🔹 FILTER: Label status (unprinted, printed, printing_failed)
+                ->when($request->label_status, function ($q, $labelStatus) {
+                    Log::info("Applying filter: label_status = {$labelStatus}");
+                    $q->where('label_status', $labelStatus);
+                })
+
+
+                // 🔹 FILTER: Payment method (cod_pending, Hitpay)
+                ->when($request->payment_method, function ($q, $method) {
+                    Log::info("Applying filter: payment_method = {$method}");
+                    $q->where('payment_method', $method);
+                })
+
+                // 🔹 FILTER: Order status (stored in `status` column)
+                ->when($request->order_status, function ($q, $orderStatus) {
+                    Log::info("Applying filter: status = {$orderStatus}");
+                    $q->where('status', $orderStatus);
+                })
+
                 ->orderBy('created_at', 'desc')
                 ->select('*');
 
+            // 🔹 Log total results BEFORE DataTables response
+            Log::info('Filtered Payments Count: ' . $payments->count());
 
             return DataTables::of($payments)
                 ->addIndexColumn()
                 ->addColumn('role', function ($payment) {
-                    // customer = User model (because of Payment::customer())
                     $user = $payment->customer;
 
                     if (!$user) {
                         return 'No User';
                     }
 
-                    // roles() is defined on User model
                     if ($user->roles->isEmpty()) {
                         return 'No Role';
                     }
 
-                    // If user can have multiple roles (e.g. "Customer, Distributor")
                     return $user->roles->pluck('name')->join(', ');
                 })
-
                 ->addColumn('waybill_number', function ($payment) {
                     return $payment->tracking_number ?? 'Unknown';
+                })
+                ->addColumn('short_address', function ($payment) {
+                    if (!$payment->deliveryAddress) {
+                        return 'No Address';
+                    }
+                    return Str::limit($payment->deliveryAddress->full_address, 50);
                 })
                 ->addColumn('status', function ($payment) {
                     $statusText = ucfirst(str_replace('_', ' ', $payment->status));
                     $checked = $payment->status === 'Paid' ? 'checked' : '';
                     return '<input type="checkbox" class="status-checkbox" data-id="' . $payment->id . '" ' . $checked . '> ' . $statusText;
+                })
+
+                ->addColumn('label_status_text', function ($payment) {
+                    $status = $payment->label_status ?? 'unprinted';
+                    return ucfirst(str_replace('_', ' ', $status));
                 })
                 ->rawColumns(['status'])
                 ->make(true);
@@ -149,6 +283,7 @@ class PaymentController extends Controller
 
         return view('admin.payments.index');
     }
+
 
 
     // ------------------DISTRIBUTOR SIDE---------------------------
@@ -2069,11 +2204,20 @@ class PaymentController extends Controller
                 $postData
             );
 
+            $payment->update([
+                'jt_post_data' => json_encode($postData, JSON_PRETTY_PRINT),
+            ]);
+
             Log::info('J&T API Response', [
                 'payment_id' => $payment->id,
                 'status'     => $response->status(),
                 'body'       => $response->body(),
                 'json'       => $response->json(),
+            ]);
+
+            // ✅ Save the FULL JSON response body to database
+            $payment->update([
+                'jt_response_body' => $response->body()
             ]);
 
             // 🔹 SAVE MAILNO RETURNED BY J&T

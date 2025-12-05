@@ -16,11 +16,14 @@ class Payment extends Model
         'payment_method',
         'total',
         'status',
+        'label_status',
         'transaction_id',
         'tracking_number',
         'date_of_payment',
         'upload_payment',
-        'upload_shipping_payment'
+        'upload_shipping_payment',
+        'jt_response_body',
+        'jt_post_data'
     ];
 
     // Define the relationship to the Customer (User) model

@@ -3,7 +3,6 @@
         <div class="mb-4 text-center">
             <h1 class="text-3xl font-bold">Payment Details!</h1>
         </div>
-
         <div class="py-2 border-t border-gray-200">
             <p class="text-sm font-semibold">Receipt ID:</p>
             <p class="text-lg font-bold text-gray-800">{{ $payment->id }}</p>
@@ -71,5 +70,19 @@
             <p class="text-lg text-gray-800">No file uploaded</p>
             @endif
         </div>
+
+        @if($jtResponse)
+        <div class="mt-6 p-4 bg-gray-50 rounded-lg shadow-sm">
+            <h2 class="text-xl font-bold mb-3">J&T API Details</h2>
+
+            <p><strong>Logistic Provider:</strong> {{ $jtResponse['logisticproviderid'] }}</p>
+            <p><strong>Mail No:</strong> {{ $jtResponse['responseitems'][0]['mailno'] ?? 'N/A' }}</p>
+            <p><strong>Sorting Code:</strong> {{ $jtResponse['responseitems'][0]['sortingcode'] ?? 'N/A' }}</p>
+            <p><strong>4-Sorting Code:</strong> {{ $jtResponse['responseitems'][0]['fourSortingCode'] ?? 'N/A' }}</p>
+
+            <h3 class="mt-3 font-semibold">Raw Response:</h3>
+            <pre class="bg-gray-200 p-3 rounded">{{ json_encode($jtResponse, JSON_PRETTY_PRINT) }}</pre>
+        </div>
+        @endif
     </div>
 </x-app-layout>
